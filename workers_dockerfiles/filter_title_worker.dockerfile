@@ -8,6 +8,9 @@ COPY ./lib/serialization.py serialization.py
 COPY ./lib/middleware.py middleware.py
 COPY ./lib/filters.py filters.py
 COPY ./lib/workers.py workers.py
+COPY ./lib/logger.py logger.py
+COPY ./lib/worker_class.py worker_class.py
+
 
 COPY ./workers/filter_title_worker.py filter_title_worker.py
 

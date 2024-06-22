@@ -12,9 +12,10 @@ def main():
     worker_id = os.getenv('WORKER_ID')
     eof_queue = os.getenv('EOF_QUEUE')
     iteration_queue = os.getenv('ITERATION_QUEUE')
+    log = os.getenv('LOG')
 
 
-    worker = HashWorker(worker_id, data_source1_name, data_source2_name, data_source3_name, data_source4_name, data_output_name, hash_modulus, q3_quantity, q5_quantity, workers_quantity, eof_queue, iteration_queue)
+    worker = HashWorker(worker_id, data_source1_name, data_source2_name, data_source3_name, data_source4_name, data_output_name, hash_modulus, q3_quantity, q5_quantity, workers_quantity, eof_queue, iteration_queue, log)
     worker.run()
 
 

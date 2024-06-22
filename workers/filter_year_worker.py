@@ -14,8 +14,9 @@ def main():
     iteration_queue = os.getenv('ITERATION_QUEUE')
     eof_quantity = os.getenv('EOF_QUANTITY')
     last = True if os.getenv('LAST') == '1' else False
+    log = os.getenv('LOG')
 
-    worker = FilterWorker(worker_id, source_name, output_name, eof_queue, worker_quantity, next_worker_quantity, iteration_queue, int(eof_quantity), last)
+    worker = FilterWorker(worker_id, source_name, output_name, eof_queue, worker_quantity, next_worker_quantity, iteration_queue, int(eof_quantity), last, log)
     worker.set_filter_type('YEAR', year_range_condition, years)
     worker.run()
 

@@ -26,6 +26,9 @@ services:
       - HOST=server
       - PORT=12345
       - LISTEN_BACKLOG=1
+      - LOG=server_log
+    volumes:
+        - ./persisted_data:/persisted_data
 
   client_1:
     container_name: client_1
@@ -80,6 +83,10 @@ services:
       - WORKERS_Q5_TITLES=3,QUEUE_Q5|filter_category_worker
       - WORKERS_Q5_REVIEWS=4,QUEUE_Q5|review_sentiment_worker
       - EOF_QUANTITY=3,1,1,1,1
+      - LOG_RESULTS=query_coordinator_results
+      - LOG_DATA=query_coordinator_data
+    volumes:
+      - ./persisted_data:/persisted_data
 
   filter_category_computers_worker0:
     container_name: filter_category_computers_worker0
@@ -97,6 +104,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_category
       - EOF_QUANTITY=1
       - LAST=0
+      - LOG=filter_category_computers_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_category_computers_worker1:
     container_name: filter_category_computers_worker1
     build:
@@ -113,6 +123,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_category
       - EOF_QUANTITY=1
       - LAST=0
+      - LOG=filter_category_computers_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_category_computers_worker2:
     container_name: filter_category_computers_worker2
     build:
@@ -129,6 +142,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_category
       - EOF_QUANTITY=1
       - LAST=0
+      - LOG=filter_category_computers_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_title_worker0:
     container_name: filter_title_worker0
     build:
@@ -145,6 +161,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_title
       - EOF_QUANTITY=3
       - LAST=0
+      - LOG=filter_title_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_title_worker1:
     container_name: filter_title_worker1
     build:
@@ -161,6 +180,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_title
       - EOF_QUANTITY=3
       - LAST=0
+      - LOG=filter_title_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_title_worker2:
     container_name: filter_title_worker2
     build:
@@ -177,6 +199,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_title
       - EOF_QUANTITY=3
       - LAST=0
+      - LOG=filter_title_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_year_worker_q1-0:
     container_name: filter_year_worker_q1-0
     build:
@@ -194,6 +219,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_year
       - EOF_QUANTITY=3
       - LAST=1
+      - LOG=filter_year_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_year_worker_q1-1:
     container_name: filter_year_worker_q1-1
     build:
@@ -211,6 +239,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_year
       - EOF_QUANTITY=3
       - LAST=1
+      - LOG=filter_year_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_year_worker_q1-2:
     container_name: filter_year_worker_q1-2
     build:
@@ -228,6 +259,9 @@ services:
       - ITERATION_QUEUE=QUEUE_Q1|iteration_year
       - EOF_QUANTITY=3
       - LAST=1
+      - LOG=filter_year_worker_q1
+    volumes:
+      - ./persisted_data:/persisted_data
 
 
   decade_counter_worker0:
@@ -240,8 +274,11 @@ services:
       - WORKERS_QUANTITY=3
       - DATA_SOURCE_NAME=QUEUE_Q2|decade_counter_worker
       - DATA_OUTPUT_NAME=QUEUE_Q2|global_decade_counter_worker
-      - ITERATION_QUEUE=QUEUE_Q2|iteration_decade_counter
       - NEXT_WORKERS_QUANTITY=1
+      - EOF_QUANTITY=1
+      - LOG=decade_counter_worker_q2
+    volumes:
+      - ./persisted_data:/persisted_data
   decade_counter_worker1:
     container_name: decade_counter_worker1
     build:
@@ -252,8 +289,11 @@ services:
       - WORKERS_QUANTITY=3
       - DATA_SOURCE_NAME=QUEUE_Q2|decade_counter_worker
       - DATA_OUTPUT_NAME=QUEUE_Q2|global_decade_counter_worker
-      - ITERATION_QUEUE=QUEUE_Q2|iteration_decade_counter
       - NEXT_WORKERS_QUANTITY=1
+      - EOF_QUANTITY=1
+      - LOG=decade_counter_worker_q2
+    volumes:
+      - ./persisted_data:/persisted_data
   decade_counter_worker2:
     container_name: decade_counter_worker2
     build:
@@ -264,8 +304,11 @@ services:
       - WORKERS_QUANTITY=3
       - DATA_SOURCE_NAME=QUEUE_Q2|decade_counter_worker
       - DATA_OUTPUT_NAME=QUEUE_Q2|global_decade_counter_worker
-      - ITERATION_QUEUE=QUEUE_Q2|iteration_decade_counter
       - NEXT_WORKERS_QUANTITY=1
+      - EOF_QUANTITY=1
+      - LOG=decade_counter_worker_q2
+    volumes:
+      - ./persisted_data:/persisted_data
   global_decade_counter_worker0:
     container_name: global_decade_counter_worker0
     build:
@@ -280,6 +323,9 @@ services:
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q2|iteration_decade_counter
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=global_decade_counter_worker_q2
+    volumes:
+      - ./persisted_data:/persisted_data
 
 
   filter_year_worker_q3-0:
@@ -299,6 +345,9 @@ services:
       - EXCHANGE_TYPE=fanout
       - EOF_QUEUE=QUEUE_Q3|eof_year
       - ITERATION_QUEUE=QUEUE_Q3|iteration_year
+      - LOG=filter_year_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_year_worker_q3-1:
     container_name: filter_year_worker_q3-1
     build:
@@ -316,6 +365,9 @@ services:
       - EXCHANGE_TYPE=fanout
       - EOF_QUEUE=QUEUE_Q3|eof_year
       - ITERATION_QUEUE=QUEUE_Q3|iteration_year
+      - LOG=filter_year_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_year_worker_q3-2:
     container_name: filter_year_worker_q3-2
     build:
@@ -333,6 +385,9 @@ services:
       - EXCHANGE_TYPE=fanout
       - EOF_QUEUE=QUEUE_Q3|eof_year
       - ITERATION_QUEUE=QUEUE_Q3|iteration_year
+      - LOG=filter_year_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   reviews_counter_worker0:
     container_name: reviews_counter_worker0
     build:
@@ -348,6 +403,9 @@ services:
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   reviews_counter_worker1:
     container_name: reviews_counter_worker1
     build:
@@ -363,6 +421,9 @@ services:
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   reviews_counter_worker2:
     container_name: reviews_counter_worker2
     build:
@@ -378,6 +439,9 @@ services:
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   reviews_counter_worker3:
     container_name: reviews_counter_worker3
     build:
@@ -393,6 +457,9 @@ services:
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   reviews_counter_worker4:
     container_name: reviews_counter_worker4
     build:
@@ -408,6 +475,9 @@ services:
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   reviews_counter_worker5:
     container_name: reviews_counter_worker5
     build:
@@ -423,6 +493,9 @@ services:
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_review_quantity_worker0:
     container_name: filter_review_quantity_worker0
     build:
@@ -437,6 +510,10 @@ services:
       - NEXT_WORKER_QUANTITY=5
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - WORKER_ID=0
+      - LOG=filter_review_quantity_worker_q3
+    volumes:
+      - ./persisted_data:/persisted_data
 
 
   top10_worker0:
@@ -454,6 +531,9 @@ services:
       - EOF_QUANTITY=1
       - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+    volumes:
+      - ./persisted_data:/persisted_data
   top10_worker1:
     container_name: top10_worker1
     build:
@@ -469,6 +549,9 @@ services:
       - EOF_QUANTITY=1
       - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+    volumes:
+      - ./persisted_data:/persisted_data
   top10_worker2:
     container_name: top10_worker2
     build:
@@ -484,6 +567,9 @@ services:
       - EOF_QUANTITY=1
       - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+    volumes:
+      - ./persisted_data:/persisted_data
   top10_worker3:
     container_name: top10_worker3
     build:
@@ -499,6 +585,9 @@ services:
       - EOF_QUANTITY=1
       - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+    volumes:
+      - ./persisted_data:/persisted_data
   top10_worker4:
     container_name: top10_worker4
     build:
@@ -514,6 +603,9 @@ services:
       - EOF_QUANTITY=1
       - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+    volumes:
+      - ./persisted_data:/persisted_data
   top_10_worker_last0:
     container_name: top_10_worker_last0
     build:
@@ -530,6 +622,9 @@ services:
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+    volumes:
+      - ./persisted_data:/persisted_data
 
 
   review_sentiment_worker0:
@@ -542,9 +637,11 @@ services:
       - WORKERS_QUANTITY=4
       - DATA_SOURCE_NAME=QUEUE_Q5|review_sentiment_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_reviews
-      - EOF_QUEUE=QUEUE_Q5|eof_review_sentiment
       - NEXT_WORKER_QUANTITY=6
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_review_sentiment
+      - EOF_QUANTITY=1
+      - LOG=review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   review_sentiment_worker1:
     container_name: review_sentiment_worker1
     build:
@@ -555,9 +652,11 @@ services:
       - WORKERS_QUANTITY=4
       - DATA_SOURCE_NAME=QUEUE_Q5|review_sentiment_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_reviews
-      - EOF_QUEUE=QUEUE_Q5|eof_review_sentiment
       - NEXT_WORKER_QUANTITY=6
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_review_sentiment
+      - EOF_QUANTITY=1
+      - LOG=review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   review_sentiment_worker2:
     container_name: review_sentiment_worker2
     build:
@@ -568,9 +667,11 @@ services:
       - WORKERS_QUANTITY=4
       - DATA_SOURCE_NAME=QUEUE_Q5|review_sentiment_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_reviews
-      - EOF_QUEUE=QUEUE_Q5|eof_review_sentiment
       - NEXT_WORKER_QUANTITY=6
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_review_sentiment
+      - EOF_QUANTITY=1
+      - LOG=review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   review_sentiment_worker3:
     container_name: review_sentiment_worker3
     build:
@@ -581,9 +682,11 @@ services:
       - WORKERS_QUANTITY=4
       - DATA_SOURCE_NAME=QUEUE_Q5|review_sentiment_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_reviews
-      - EOF_QUEUE=QUEUE_Q5|eof_review_sentiment
       - NEXT_WORKER_QUANTITY=6
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_review_sentiment
+      - EOF_QUANTITY=1
+      - LOG=review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_category_worker0:
     container_name: filter_category_worker0
     build:
@@ -600,6 +703,9 @@ services:
       - EOF_QUEUE=QUEUE_Q5|eof_category
       - ITERATION_QUEUE=QUEUE_Q5|iteration_category
       - EOF_QUANTITY=1
+      - LOG=filter_category_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_category_worker1:
     container_name: filter_category_worker1
     build:
@@ -616,6 +722,9 @@ services:
       - EOF_QUEUE=QUEUE_Q5|eof_category
       - ITERATION_QUEUE=QUEUE_Q5|iteration_category
       - EOF_QUANTITY=1
+      - LOG=filter_category_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   filter_category_worker2:
     container_name: filter_category_worker2
     build:
@@ -632,6 +741,9 @@ services:
       - EOF_QUEUE=QUEUE_Q5|eof_category
       - ITERATION_QUEUE=QUEUE_Q5|iteration_category
       - EOF_QUANTITY=1
+      - LOG=filter_category_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   mean_review_sentiment_worker0:
     container_name: mean_review_sentiment_worker0
     build:
@@ -647,6 +759,9 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   mean_review_sentiment_worker1:
     container_name: mean_review_sentiment_worker1
     build:
@@ -662,6 +777,9 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   mean_review_sentiment_worker2:
     container_name: mean_review_sentiment_worker2
     build:
@@ -677,6 +795,9 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   mean_review_sentiment_worker3:
     container_name: mean_review_sentiment_worker3
     build:
@@ -692,6 +813,9 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   mean_review_sentiment_worker4:
     container_name: mean_review_sentiment_worker4
     build:
@@ -707,6 +831,9 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   mean_review_sentiment_worker5:
     container_name: mean_review_sentiment_worker5
     build:
@@ -722,6 +849,9 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data
   percentile_worker0:
     container_name: percentile_worker0
     build:
@@ -738,3 +868,6 @@ services:
       - ACCUMULATOR=True
       - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=percentile_worker_q5
+    volumes:
+      - ./persisted_data:/persisted_data

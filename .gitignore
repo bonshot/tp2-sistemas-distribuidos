@@ -1,2 +1,5 @@
 # Ignore the folder with csv's
 datasets/
+
+# Ignore the file with the .txts that create the workers
+persisted_data/ 

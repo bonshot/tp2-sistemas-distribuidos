@@ -10,8 +10,9 @@ def main():
     eof_quantity_titles = int(os.getenv('EOF_QUANTITY_TITLES'))
     eof_quantity_reviews = int(os.getenv('EOF_QUANTITY_REVIEWS'))
     iteration_queue = os.getenv('ITERATION_QUEUE')
+    log = os.getenv('LOG')
 
-    worker = JoinWorker(worker_id, data_source_titles_name, data_source_reviews_name, data_output_name, eof_quantity_titles, eof_quantity_reviews, 3, iteration_queue)
+    worker = JoinWorker(worker_id, data_source_titles_name, data_source_reviews_name, data_output_name, eof_quantity_titles, eof_quantity_reviews, 3, iteration_queue, log)
     worker.run()
 
     

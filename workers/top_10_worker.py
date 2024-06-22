@@ -12,9 +12,10 @@ def main():
     worker_id = os.getenv('WORKER_ID')
     last = True if os.getenv('LAST') == '1' else False
     next_workers_quantity = int(os.getenv('NEXT_WORKERS_QUANTITY'))
+    log = os.getenv('LOG')
 
     
-    worker = TopNWorker(worker_id, data_source_name, data_output_name, workers_quantity, top_n, last, iteration_queue, next_workers_quantity)
+    worker = TopNWorker(worker_id, data_source_name, data_output_name, workers_quantity, top_n, last, iteration_queue, next_workers_quantity, log)
     worker.run()
 
 

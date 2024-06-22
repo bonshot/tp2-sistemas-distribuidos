@@ -84,18 +84,30 @@ class Middleware:
     def consume(self):
         self._channel.start_consuming()
 
-    def ack_message(self, method):
-        self._channel.basic_ack(delivery_tag=method.delivery_tag)
+    def ack_message(self, msg_identifier):
+        """
+        The user can pass the method or the delivery tag to ack the message
+        """
+        if isinstance(msg_identifier, int):
+            self._channel.basic_ack(delivery_tag=msg_identifier)
+        else:
+            self._channel.basic_ack(delivery_tag=msg_identifier.delivery_tag)
 
     def close_connection(self):
-        self._channel.stop_consuming()
+        if self._channel.is_open:
+            self._channel.stop_consuming()
+            self._channel.close()
         self._connection.close()
+
 
     def stop_consuming(self, method=None):
         if method != None:
             self._channel.stop_consuming(consumer_tag=method.consumer_tag)
         else:    
             self._channel.stop_consuming()
+
+    def ack_all(self, tag):
+        self._channel.basic_ack(tag, True)
 
             
         

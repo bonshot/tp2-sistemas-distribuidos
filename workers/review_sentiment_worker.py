@@ -7,10 +7,10 @@ def main():
     worker_id = os.getenv('WORKER_ID')
     workers_quantity = int(os.getenv('WORKERS_QUANTITY'))
     next_workers_quantity = int(os.getenv('NEXT_WORKER_QUANTITY'))
-    eof_queue = os.getenv('EOF_QUEUE')
-    iteration_queue = os.getenv('ITERATION_QUEUE')
+    eof_quantity = int(os.getenv('EOF_QUANTITY'))
+    log = os.getenv('LOG')
 
-    worker = ReviewSentimentWorker(data_source_name, data_output_name, worker_id, workers_quantity, next_workers_quantity, eof_queue, iteration_queue)
+    worker = ReviewSentimentWorker(data_source_name, data_output_name, worker_id, workers_quantity, next_workers_quantity, eof_quantity, log)
     worker.run()
 
     

@@ -9,40 +9,47 @@ Then each row has to be splitted by the FIELD_SEPARATOR = "@|@"
 """
 
 ID_MSG_SEPARATOR = "~|~"
-ID_QUEUE_SEPARATOR = '_'
+ID_SEPARATOR = '_'
 FIELD_SEPARATOR = "@|@"
 ROW_SEPARATOR = "$|$"
 KEY_VAL_SEPARATOR = "#|#"
 VALUES_SEPARATOR = ","
 EOF = 'EOF_'
 RESULT_SLICE_FIELD = "RESULT_SLICE"
-LAST_EOF_INDEX = 4
+EOF_CLIENT_ID_INDEX = 4
+EOF_WORKER_ID_INDEX = 6
 NO_ID = ''
 
 def add_id(message, id):
     return id + ID_MSG_SEPARATOR + message
 
 def split_message_info(message):
+    """
+    Every message comes with the format: MSG_ID~|~CLIENT_ID~|~message_content
+    Here we split this message so the user can get both ids and the content message.
+    """
     message = Message(message).decode()
     return message.split(ID_MSG_SEPARATOR)
 
 def serialize_batch(batch):
     return [serialize_dict(filtered_dictionary) for filtered_dictionary in batch]
 
-def serialize_message(message_items, id=NO_ID):
+def serialize_message(message_items, client_id=NO_ID, msg_id=NO_ID):
     """
     Serialize a message (list of items) by adding a separator
     on each item and deleting the newline character
     """
     message = ROW_SEPARATOR.join(message_items)
-    message = add_id(message, id)
+    message = add_id(message, client_id)            # Add the client id to the message
+    message = add_id(message, msg_id)               # Add the message_id to the message
+
     return message
 
 def deserialize_titles_message(bytes):
     # Get the id and the message separated 
-    client_id, message = split_message_info(bytes)
+    msg_id, client_id, message = split_message_info(bytes)
      
-    return client_id, [deserialize_into_titles_dict(row) for row in message.split(ROW_SEPARATOR)] 
+    return msg_id, client_id, [deserialize_into_titles_dict(row) for row in message.split(ROW_SEPARATOR)] 
 
 def serialize_dict(dict_to_serialize):
     msg = ''
@@ -80,13 +87,16 @@ def deserialize_into_titles_dict(row):
     return title_dict
 
 def is_EOF(msg_bytes):
-    return msg_bytes[:LAST_EOF_INDEX] == bytes(EOF, 'utf-8')
+    return msg_bytes[:EOF_CLIENT_ID_INDEX] == bytes(EOF, 'utf-8')
 
-def get_EOF_id(bytes):
-    return str(bytes.decode('utf-8')[LAST_EOF_INDEX])
+def get_EOF_client_id(bytes):
+    return str(bytes.decode('utf-8')[EOF_CLIENT_ID_INDEX])
 
-def create_EOF(id):
-    return EOF + id
+def get_EOF_worker_id(bytes):
+    return str(bytes.decode('utf-8')[EOF_WORKER_ID_INDEX])
+
+def create_EOF(client_id, worker_id):
+    return EOF + client_id + ID_SEPARATOR + worker_id
 
 def hash_title(s):                                                                                                                                
     hash = 5381
@@ -95,7 +105,14 @@ def hash_title(s):
     return hash & 0xFFFFFFFF
 
 def create_queue_name(queue, client_id):
-    return queue + ID_QUEUE_SEPARATOR + client_id
+    return queue + ID_SEPARATOR + client_id
+
+def create_log_file_name(log, worker_id, is_temp):
+    if is_temp:
+        log_file_name = log + ID_SEPARATOR + worker_id + ID_SEPARATOR + 'temp' + '.txt'
+    else:
+        log_file_name = log + ID_SEPARATOR + worker_id + '.txt'
+    return log_file_name
 
 
 class Message:
@@ -134,5 +151,24 @@ class Message:
     def clean(self):
         self.msg= ""
 
-    def add_id(self, id):
-        self.msg = add_id(self.msg, id)
+    def add_ids(self, client_id, msg_id):
+        """
+        Adds the client_id and the msg_id to the message
+        """
+        self.msg = add_id(self.msg, client_id)
+        self.msg = add_id(self.msg, msg_id)
+
+    def create_EOF(self, client_id, eof_msg):
+        file_identifier = self.get_file_identifier(eof_msg)
+        self.msg = EOF + client_id + ID_SEPARATOR + file_identifier
+
+    def is_EOF(self, msg):
+        return EOF in msg
+    
+    def contains_EOF(self):
+        return EOF in self.msg
+    
+    def get_file_identifier(self, eof_msg):
+        _, file_identifier = eof_msg.split('_')
+        return file_identifier
+
