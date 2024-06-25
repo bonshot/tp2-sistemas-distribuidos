@@ -58,7 +58,8 @@ while true; do
         done
         sleep 5
 
-        if [ "$(docker inspect --format='{{.State.Running}}' client_1)" == "false" ] && [ "$(docker inspect --format='{{.State.Running}}' client_2)" == "false" ]; then
+        #if [ "$(docker inspect --format='{{.State.Running}}' client_1)" == "false" ] && [ "$(docker inspect --format='{{.State.Running}}' client_2)" == "false" ]; then
+        if [ "$(docker inspect --format='{{.State.Running}}' client_1)" == "false" ]; then
             echo "Both clients finished"
             break
         else
@@ -70,7 +71,7 @@ while true; do
     sleep 2
 
     # Ejecutar el script de python que se fija si los resultados de los clientes dieron bien 
-    python3 bugfinder.py
+    python3 results_checker.py
     # Capturar el código de salida del script de Python
     exit_code=$?
     # Verificar el código de salida

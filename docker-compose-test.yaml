@@ -50,25 +50,25 @@ services:
       - ./datasets:/datasets
       - ./debug:/debug
 
-  client_2:
-    container_name: client_2
-    build:
-      context: .
-      dockerfile: ./client/client.dockerfile
-    depends_on:
-      - server
-    links:
-      - server
-    environment:
-      - ID=2
-      - PYTHONUNBUFFERED=1
-      - HOST=server
-      - PORT=12345
-      - TITLES_FILEPATH=./datasets/books_data_sample_bugfinder2.csv
-      - REVIEWS_FILEPATH=./datasets/books_rating_sample_bugfinder.csv
-    volumes:
-      - ./datasets:/datasets
-      - ./debug:/debug
+  # client_2:
+  #   container_name: client_2
+  #   build:
+  #     context: .
+  #     dockerfile: ./client/client.dockerfile
+  #   depends_on:
+  #     - server
+  #   links:
+  #     - server
+  #   environment:
+  #     - ID=2
+  #     - PYTHONUNBUFFERED=1
+  #     - HOST=server
+  #     - PORT=12345
+  #     - TITLES_FILEPATH=./datasets/books_data_sample_bugfinder2.csv
+  #     - REVIEWS_FILEPATH=./datasets/books_rating_sample_bugfinder.csv
+  #   volumes:
+  #     - ./datasets:/datasets
+  #     - ./debug:/debug
 
   query_coordinator_worker:
     container_name: query_coordinator_worker

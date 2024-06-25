@@ -242,21 +242,12 @@ class JoinWorker(MultipleQueueWorker):
         return title_rating
 
     def check_leftover_reviews(self, client_id):
-        if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-            self.middleware.send_message(f'DEBUG', f'eNTRE A CHEQUEAR')
         if client_id in self.leftover_reviews:
-            if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                self.middleware.send_message(f'DEBUG', f'HABIA [{len(self.leftover_reviews[client_id])}] REVIEWS PARA AGREGAR')
             self.add_review(client_id, self.leftover_reviews[client_id])
 
     def send_results(self, client_id):
-        if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-            self.middleware.send_message(f'DEBUG', f'ANTES DE CHEQUEAR LOS LEFTOVERS')
         # Check if there are leftover reviews that need to be added to the counter_dict
         self.check_leftover_reviews(client_id)
-
-        if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-            self.middleware.send_message(f'DEBUG', f'YA CHEQUEE LEFTOVER REVIEWS')
 
         # Send batch
         batch_size = 0
@@ -288,9 +279,6 @@ class JoinWorker(MultipleQueueWorker):
             batch_msg_id = self.worker_id + '_' + str(msg_id)
             serialized_message = serialize_message([serialize_dict(batch)], client_id, batch_msg_id)
             self.middleware.send_message(self.output_name, serialized_message)
-
-        if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-            self.middleware.send_message(f'DEBUG', f'YA mandee los batches. ahora mando el eof')
 
         # Finally, send the EOF
         eof_msg = create_EOF(client_id, self.worker_id)

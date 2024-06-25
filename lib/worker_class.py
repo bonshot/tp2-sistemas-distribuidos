@@ -530,9 +530,6 @@ class MultipleQueueWorker:
         self.clients_unacked_queue_eofs[queue][client_id].add(eof_method.delivery_tag)
 
     def ack_queue_EOFs(self, client_id, queue):
-        if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-            eofs = ','.join([str(x) for x in self.clients_unacked_queue_eofs[queue][client_id]])
-            self.middleware.send_message(f'DEBUG', f'HAGO ACK DE TODOS LOS EOFS DE LA COLA [{queue}] que son [{eofs}]')
         unacked_eofs = self.clients_unacked_queue_eofs[queue][client_id]
         for tag in unacked_eofs:
             self.middleware.ack_message(tag)
@@ -601,8 +598,8 @@ class MultipleQueueWorker:
             # If we havent received any messages from the queue for that client
             # and we receive an EOF. It means that there where no results for
             # that client in the query
-            if self.acum:
-                self.middleware.send_message('DEBUG_QC', f'NO HABIA LLEGADO NINGUN MENSAJE PARA [{queue}]')
+            # if self.acum:
+            #     self.middleware.send_message('DEBUG_QC', f'NO HABIA LLEGADO NINGUN MENSAJE PARA [{queue}]')
             return False
         
         return self.clients_acummulated_queue_msg_ids[queue][client_id] == 'FINISHED'
@@ -641,40 +638,70 @@ class MultipleQueueWorker:
             client_id = get_EOF_client_id(body)
             worker_id = get_EOF_worker_id(body)
 
-            if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                self.middleware.send_message(f'DEBUG', f'LLEGO EL EOF: [{body}]')
-            elif self.acum:
-                self.middleware.send_message(f'DEBUG_QC', f'LLEGO EL EOF: [{body}]')
+            if not self.acum:
+                self.middleware.send_message(f'DEBUG_{self.input_titles_name}', f'LLEGO EL EOF: [{body}]')
+            # elif self.acum:
+            #     self.middleware.send_message(f'DEBUG_QC', f'LLEGO EL EOF: [{body}]')
+
+            ###################
+            if get_rand(4000) == 5:
+                debug_log(self.input_name, 'ANTES client_is_active')
+                raise Exception("Fallo para debugear")
+            ###################
             
             
             if self.client_is_active(client_id):
 
-                if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                    self.middleware.send_message(f'DEBUG', f'EL CLIENT [{client_id}] ESTA ACTIVO')
-                elif self.acum:
-                    self.middleware.send_message(f'DEBUG_QC', f'EL CLIENT [{client_id}] ESTA ACTIVO')
+                ###################
+                if get_rand(4000) == 5:
+                    debug_log(self.input_name, 'DESPUES client_is_active')
+                    raise Exception("Fallo para debugear")
+                ###################
+
+                if not self.acum:
+                    self.middleware.send_message(f'DEBUG_{self.input_titles_name}', f'EL CLIENT [{client_id}] ESTA ACTIVO')
+                # elif self.acum:
+                #     self.middleware.send_message(f'DEBUG_QC', f'EL CLIENT [{client_id}] ESTA ACTIVO')
 
                 if not self.is_EOF_repeated(client_id, worker_id, queue):
 
-                    if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                        self.middleware.send_message(f'DEBUG', f'EL EOF NO ESTA REPETIDO')
-                    elif self.acum:
-                        self.middleware.send_message(f'DEBUG_QC', f'EL EOF NO ESTA REPETIDO')
+                    ###################
+                    if get_rand(4000) == 5:
+                        debug_log(self.input_name, 'DESPUES is_EOF_repeated')
+                        raise Exception("Fallo para debugear")
+                    ###################
+
+                    if not self.acum:
+                        self.middleware.send_message(f'DEBUG_{self.input_titles_name}', f'EL EOF NO ESTA REPETIDO')
+                    # elif self.acum:
+                    #     self.middleware.send_message(f'DEBUG_QC', f'EL EOF NO ESTA REPETIDO')
 
                     if not self.is_queue_finished(client_id, queue):
 
-                        if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                            self.middleware.send_message(f'DEBUG', f'LA COLA [{queue}] NO ESTABA TERMINADA')
-                        elif self.acum:
-                            self.middleware.send_message(f'DEBUG_QC', f'LA COLA [{queue}] NO ESTABA TERMINADA')
+                        ###################
+                        if get_rand(4000) == 5:
+                            debug_log(self.input_name, 'DESPUES is_queue_finished')
+                            raise Exception("Fallo para debugear")
+                        ###################
+
+                        if not self.acum:
+                            self.middleware.send_message(f'DEBUG_{self.input_titles_name}', f'LA COLA [{queue}] NO ESTABA TERMINADA')
+                        # elif self.acum:
+                        #     self.middleware.send_message(f'DEBUG_QC', f'LA COLA [{queue}] NO ESTABA TERMINADA')
 
                         self.add_unacked_queue_EOF(client_id, method, queue)
                         if self.received_all_client_queue_EOFs(client_id, queue):
 
-                            if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                                self.middleware.send_message(f'DEBUG', f'YA LLEGARON TODOS LOS EOFS PARA LA COLA [{queue}]')
-                            elif self.acum:
-                                self.middleware.send_message(f'DEBUG_QC', f'YA LLEGARON TODOS LOS EOFS PARA LA COLA [{queue}]')
+                            ###################
+                            if get_rand(4000) == 5:
+                                debug_log(self.input_name, 'DESPUES received_all_client_queue_EOFs')
+                                raise Exception("Fallo para debugear")
+                            ###################
+
+                            if not self.acum:
+                                self.middleware.send_message(f'DEBUG_{self.input_titles_name}', f'YA LLEGARON TODOS LOS EOFS PARA LA COLA [{queue}]')
+                            # elif self.acum:
+                            #     self.middleware.send_message(f'DEBUG_QC', f'YA LLEGARON TODOS LOS EOFS PARA LA COLA [{queue}]')
 
                             # Persist on disk the acums and the received msg_ids
                             self.persist_state()
@@ -682,28 +709,48 @@ class MultipleQueueWorker:
                             self.ack_last_queue_messages(queue)
                             if self.received_all_EOFs(client_id):
 
-                                if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                                    self.middleware.send_message(f'DEBUG', f'YA LLEGARON TODOS LOS EOFS')
-                                elif self.acum:
-                                    self.middleware.send_message(f'DEBUG_QC', f'YA LLEGARON TODOS LOS EOFS')
+                                ###################
+                                if get_rand(4000) == 5:
+                                    debug_log(self.input_name, 'DESPUES received_all_EOFs')
+                                    raise Exception("Fallo para debugear")
+                                ###################
+
+                                if not self.acum:
+                                    self.middleware.send_message(f'DEBUG_{self.input_titles_name}', f'YA LLEGARON TODOS LOS EOFS')
+                                # elif self.acum:
+                                #     self.middleware.send_message(f'DEBUG_QC', f'YA LLEGARON TODOS LOS EOFS')
 
                                 # Send the acum of the client and the EOF
                                 self.send_results(client_id)
 
-                                if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                                    self.middleware.send_message(f'DEBUG', f'SE MANDARON LOS RESULTADOS')
-                                elif self.acum:
-                                    self.middleware.send_message(f'DEBUG_QC', f'SE MANDARON LOS RESULTADOS')
+                                if not self.acum:
+                                    self.middleware.send_message(f'DEBUG_{self.input_titles_name}', f'SE MANDARON LOS RESULTADOS')
+                                # elif self.acum:
+                                #     self.middleware.send_message(f'DEBUG_QC', f'SE MANDARON LOS RESULTADOS')
+
+                                ###################
+                                if get_rand(4000) == 5:
+                                    debug_log(self.input_name, 'DESPUES send_results')
+                                    raise Exception("Fallo para debugear")
+                                ###################
+
+
                                 # Remove the acum of the client since it is not 
                                 # necessary anymore
                                 self.remove_active_client(client_id)
 
-                                if not self.acum and self.input_titles_name == 'QUEUE_Q3|reviews_counter_worker_titles_1':
-                                    self.middleware.send_message(f'DEBUG', f'SE BORRO EL CLIENTE')
-                                elif self.acum:
-                                    self.middleware.send_message(f'DEBUG_QC', f'SE BORRO EL CLIENTE')
+                                if not self.acum:
+                                    self.middleware.send_message(f'DEBUG_{self.input_titles_name}', f'SE BORRO EL CLIENTE')
+                                # elif self.acum:
+                                #     self.middleware.send_message(f'DEBUG_QC', f'SE BORRO EL CLIENTE')
                             else:
                                 self.finish_queue(client_id, queue)
+
+                            ###################
+                            if get_rand(4000) == 5:
+                                debug_log(self.input_name, 'ANTES persist_state')
+                                raise Exception("Fallo para debugear")
+                            ###################
 
                             # Update the state on disk and ack the EOFs for this channel and the client
                             self.persist_state()
@@ -715,6 +762,12 @@ class MultipleQueueWorker:
             return
 
         msg_id, client_id, data = deserialize_titles_message(body)
+
+        ###################
+        if get_rand(4000) == 5:
+            debug_log(self.input_name, 'ANTES is_queue_message_repeated')
+            raise Exception("Fallo para debugear")
+        ###################
 
         if not self.is_queue_message_repeated(client_id, msg_id, queue):
             self.manage_message(client_id, data, queue, method, msg_id)
