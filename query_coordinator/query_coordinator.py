@@ -47,12 +47,13 @@ class QueryCoordinator:
         signal.signal(signal.SIGTERM, self.handle_signal)
 
         self.id = ID
+        self.data_coordinator_p = None
+        self.result_coordinator_p = None
         self.workers = {Q1_KEY: workers_q1, Q2_KEY: workers_q2, Q3_TITLES_KEY: workers_q3_titles, Q3_REVIEWS_KEY: workers_q3_reviews,
                              Q5_TITLES_KEY: workers_q5_titles, Q5_REVIEWS_KEY: workers_q5_reviews}
         self.eof_quantity = eof_quantity
         self.log_data = Logger(log_data, ID)
         self.log_results = Logger(log_results, ID)
-        self.processes = []
         self.max_unacked_msgs = max_unacked_msgs   
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -61,40 +62,35 @@ class QueryCoordinator:
         self.health_checker = HealthCheckHandler(self.socket)
         self.health_check_handler_p = Process(target=self.health_checker.handle_health_check)
         self.health_check_handler_p.start()
-        self.middleware = None
-        self.queue = queue.Queue()
-        try:
-            middleware = Middleware(self.queue)
-        except Exception as e:
-            raise e
-        self.middleware = middleware    
 
     def handle_signal(self, *args):
-        for p in self.processes:
-            try:
-                p.terminate()
-                p.join()
-                p.close()
-            except ValueError:
-                # A proecess had already been closed.
-                # So we ignore it.
-                pass
+        if self.data_coordinator_p:
+            self.data_coordinator_p.terminate()
+        if self.result_coordinator_p:
+            self.data_coordinator_p.terminate()
 
-        self.health_check_handler_p.terminate()    
-        self.health_check_handler_p.join()
-        self.health_check_handler_p.close()
+        try:
+            self.health_check_handler_p.terminate()    
+            self.health_check_handler_p.join()
+            self.health_check_handler_p.close()
+        except:
+            # There is a possibility that the process
+            # hasn't been created yet
+            pass
 
 
     def run(self):
-        data_coordinator_p = Process(target=self.initiate_data_coordinator, args=())
-        data_coordinator_p.start()
-        self.processes.append(data_coordinator_p)
-        result_coordinator_p = Process(target=self.initiate_result_coordinator, args=())
-        result_coordinator_p.start()
-        self.processes.append(result_coordinator_p)
+        self.data_coordinator_p = Process(target=self.initiate_data_coordinator, args=())
+        self.data_coordinator_p.start()
+        self.result_coordinator_p = Process(target=self.initiate_result_coordinator, args=())
+        self.result_coordinator_p.start()
 
-        data_coordinator_p.join()
-        result_coordinator_p.join()
+        
+        self.data_coordinator_p.join()
+        self.result_coordinator_p.join()
+
+        self.data_coordinator_p.close()
+        self.result_coordinator_p.close()
 
     def initiate_data_coordinator(self):
         data_coordinator = DataCoordinator(self.id, self.workers, self.log_data)
@@ -355,13 +351,6 @@ class ResultsCoordinator(MultipleQueueWorker):
         self.queue.put('SIGTERM')
         if self.middleware != None:
             self.middleware.close_connection()
-
-        print("Results: ", self.clients_acum)
-        print("Unacked eofs: ", self.clients_unacked_queue_eofs)
-        print("Acum msg ids: ", self.clients_acummulated_queue_msg_ids)
-        print("Unacked msgs: ", self.unacked_queue_msgs)
-        print("Eof worker ids: ", self.queue_eof_worker_ids)
-        print("Eof quantities: ", self.eof_quantity_queues)
 
     def run(self):
         self.initialize_state()

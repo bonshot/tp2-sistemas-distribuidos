@@ -1,11 +1,15 @@
+# Ignore the debug directory
+debug/
+
 # Ignore the folder with csv's
 datasets/
+results_1.txt
+results_2.txt
+results_3.txt
+results.txt
 
 # Ignore the file with the .txts that create the workers
 persisted_data/ 
-
-# Ignore the debug directory
-debug/
 
 # Ignore files for debugging
 docker_output.log

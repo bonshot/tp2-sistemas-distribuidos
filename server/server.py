@@ -52,8 +52,8 @@ class Server:
     def handle_signal(self, *args):
         self._stop_server = True
         self.join_processes()
-        self._server_socket.close()
         try:
+            self._server_socket.close()
             self.hc_socket.close()
         except:
             # If the closing fails, it means it has been already closed
@@ -70,14 +70,24 @@ class Server:
                 # A proecess had already been closed.
                 # So we ignore it.
                 pass
+        
+        try:
+            self.results_p.terminate()
+            self.results_p.join()
+            self.results_p.close()
+        except:
+            # There is a chance that the SIGTERM
+            # arrives before declaring the process
+            pass
 
-        self.results_p.terminate()
-        self.results_p.join()
-        self.results_p.close()
-
-        self.health_check_handler_p.terminate()
-        self.health_check_handler_p.join()
-        self.health_check_handler_p.close()
+        try:
+            self.health_check_handler_p.terminate()
+            self.health_check_handler_p.join()
+            self.health_check_handler_p.close()
+        except:
+            # There is a possibility that the process
+            # hasn't been created yet
+            pass
 
 
     def persist_state(self):
@@ -267,10 +277,12 @@ class DataFordwarder:
         """
         Reads the client data and fordwards it to the corresponding parts of the system
         """
-        self._receive_and_forward_data()
         try:
+            self._receive_and_forward_data()
             self.middleware.close_connection()
-        except OSError:
+        except:
+            # The middleware and the sockets gets closed when the SIGTERM
+            # is received. So we catch those exceptions
             pass
 
     def update_state(self):

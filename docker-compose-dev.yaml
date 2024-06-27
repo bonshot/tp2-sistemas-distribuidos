@@ -73,6 +73,26 @@ services:
       - ./datasets:/datasets
       - ./debug:/debug
 
+  client_3:
+    container_name: client_3
+    build:
+      context: .
+      dockerfile: ./client/client.dockerfile
+    depends_on:
+      - server
+    links:
+      - server
+    environment:
+      - ID=3
+      - PYTHONUNBUFFERED=1
+      - HOST=server
+      - PORT=12345
+      - TITLES_FILEPATH=./datasets/books_data.csv
+      - REVIEWS_FILEPATH=./datasets/books_rating_sample.csv
+    volumes:
+      - ./datasets:/datasets
+      - ./debug:/debug
+
   query_coordinator_worker0:
     container_name: query_coordinator_worker0
     build:
@@ -98,6 +118,19 @@ services:
       - MAX_UNACKED_MSGS=5
       - ADDRESS=query_coordinator_worker0
       - PORT=4321
+
+  container_killer:
+    container_name: container_killer
+    build:
+      context: .
+      dockerfile: ./container_killer/container_killer.dockerfile
+    depends_on:
+      - rabbitmq
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root
+    environment:
+      - MODE=random
 
   container_coordinator_2:
     container_name: container_coordinator_2

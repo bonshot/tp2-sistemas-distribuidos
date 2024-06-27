@@ -26,11 +26,7 @@ class HealthChecker():
                     if self.conn:
                         self.conn.close()
                     break
-                if not conn and not coords:
-                    self.conn = self.reconnect_with_backoff(container_id, port)
-                    if health_check_sockets:
-                        health_check_sockets[container_id] = self.conn
-                print(f"Checking connection with container {container_id}", flush=True)
+                #print(f"Checking connection with container {container_id}", flush=True)
                 err = write_socket(self.conn, "HEALTH_CHECK")
                 if err:
                     print(f"Error in container {container_id}, err was: {err}", flush=True)
@@ -129,7 +125,7 @@ class HealthCheckHandler():
                     print("Error reading from socket: ", err)
                     raise err
                 if msg == "HEALTH_CHECK":
-                    print("Received health check message, sending ACK")
+                    #print("Received health check message, sending ACK")
                     write_socket(self.conn, "ACK")
             except:
                 print("Timeout reached for the health check, beginning leader election")

@@ -45,18 +45,19 @@ class BooksAnalyzer:
 
     def receive_results(self):
         # Listen the server response and print it
+        # The writing of the file is for debugging purposes
         id = os.getenv('ID')
-        #with open(f'./debug/results_{id}.txt', 'w') as f:
-        msg = None
-        while msg != "EOF":
-            msg, e = read_socket(self.server_socket)
-            if e != None:
-                print("Reconnecting to server...")
-                self._connect_server()
-                print("Reconnection succesful")
-            else:
-                #f.write(msg)
-                print(msg)
+        with open(f'./debug/results_{id}.txt', 'w') as f:
+            msg = None
+            while msg != "EOF":
+                msg, e = read_socket(self.server_socket)
+                if e != None:
+                    print("Reconnecting to server...")
+                    self._connect_server()
+                    print("Reconnection succesful")
+                else:
+                    f.write(msg)
+                    print(msg)
 
         self.server_socket.close()
 

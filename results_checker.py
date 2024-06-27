@@ -3,7 +3,7 @@ import time
 import subprocess
 import sys
 
-class BugFinder:
+class ResultsChecker:
 
     def __init__(self):
         self.q1_res = []
@@ -19,13 +19,24 @@ class BugFinder:
         ok = self.check_client_results(cl_q1, cl_q2, cl_q3, cl_q4, cl_q5)
 
         if not ok:
+            print("Error on Client 1")
             return 1
 
         cl_q1, cl_q2, cl_q3, cl_q4, cl_q5 = self.get_client_results(2)
         ok = self.check_client_results(cl_q1, cl_q2, cl_q3, cl_q4, cl_q5)
 
         if not ok:
+            print("Error on Client 2")
             return 1
+        
+        cl_q1, cl_q2, cl_q3, cl_q4, cl_q5 = self.get_client_results(3)
+        ok = self.check_client_results(cl_q1, cl_q2, cl_q3, cl_q4, cl_q5)
+
+        if not ok:
+            print("Error on Client 3")
+            return 1
+
+        print('All results OK')
 
         return 0
 
@@ -137,7 +148,7 @@ class BugFinder:
         return True
 
 if __name__ == "__main__":
-    bg = BugFinder()
+    bg = ResultsChecker()
     
     exit_code = bg.run()
     sys.exit(exit_code)       
