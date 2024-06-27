@@ -32,6 +32,9 @@ De esta manera en **fraccion_del_dataset** tiene que in un float indicando que f
 
 **IMPORTANTE**: Si se quiere usar uno de estos datasets nuevos, habra que agregar su nombre en el container del cliente en la env var **REVIEWS_FILEPATH** para que el sistema se ejecute con ese nuevo dataset.
 
+### Container Killer
+Para poder matar los contenedores que se esten ejecutando en el sistema, se creo un container dedicado a matar los contenedores que se esten ejecutando. Este posee diversos casos de uso, como por ejemplo QUERIES MODE que mata a toda la pipeline de la QUERY 1 y segundos después de la QUERY 2, COORD MODE mata al líder con workers a la vez y luego otros workers de queries distintas y finalmente a workers de otra query con el lider nuevamente, GATEWAY MODE incluye matar a el Server y workers, QueryCoordinator y workers y finalmente Server, QueryCoordinator y workers juntos, RANDOM MODE elimina cada cierto tiempo un contenedor aleatorio durante toda la ejecución.  
+Para poder usarlo simplemente se debe comentar o descomentar según se quiera o no incluirlo en el `docker-compose-dev.yaml`
 
 ## Video de ejecución con dataset original
 A continuación se adjunta el link al video donde se corre el programa con la totalidad de datos del dataset original y se muestran los resultados obtenidos por consola.  

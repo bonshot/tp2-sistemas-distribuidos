@@ -1,6 +1,12 @@
 from serialization import *
 
-import random
+from middleware import Middleware
+import socket
+import os
+from healthchecking import HealthCheckHandler
+from multiprocessing import Process
+import queue
+
 
 ACUM_KEY = 'acum'
 ACUM_MSG_IDS = 'acummulated_msgs'
@@ -11,6 +17,7 @@ class Worker:
     """
     This worker receives data from only one queue.
     """
+
     def handle_signal(self, *args):
         print("Gracefully exit")
         try:
@@ -42,6 +49,29 @@ class Worker:
             # If the closing fails, it means it has been already closed
             # in the HealthCheckHandler process
             pass
+    
+    def initialize_hc_process(self):
+        """
+        Starts the process responsible for acking the HealthCheck
+        """
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+    
+    def initialize_middleware(self):
+        self.middleware = None
+        self.queue = queue.Queue()
+        try:
+            middleware = Middleware(self.queue)
+        except Exception as e:
+            raise e
+        self.middleware = middleware
 
     def _create_batches(self, batch, next_workers_quantity):
         raise Exception('Function needs to be implemented')
@@ -107,7 +137,6 @@ class Worker:
     def manage_EOF(self, body, method, client_id):
         raise Exception('Function needs to be implemented')
 
-
     def ack_EOFs(self, client_id):
         for delivery_tag in self.clients_unacked_eofs[client_id]:
             self.middleware.ack_message(delivery_tag)
@@ -155,6 +184,8 @@ class Worker:
         self.handle_message(method, client_id, msg_id, data)
 
     def run(self):
+        self.initialize_hc_process()
+        self.initialize_middleware()
         self.initialize_state()
         callback_with_params = lambda ch, method, properties, body: self.handle_data(method, body)
         try:

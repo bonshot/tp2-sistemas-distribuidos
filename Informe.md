@@ -78,6 +78,8 @@ Del lado del QueryCoordinator pasa algo similar. Recordemos que este worker se e
 #### <span style="color:#9669f0"> Conexion Server-QueryCoordinator </span>
 Asi se veria como estan conectados ambos workers para la entrada y salida de datos del sistema.
 
+<p align="center"><img src="./images/ConexionServer-QC.png" /> </p>
+
 
 ## <span style="color:#9669f0"> Diagrama de robustez </span>
 A continuación podemos observar el diagrama de robustez que nos indica cómo se relacionan las entidades del sistema y la manera de comunicación entre ellas mediante boundaries, controllers y entities.  

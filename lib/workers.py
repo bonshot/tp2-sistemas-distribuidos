@@ -29,7 +29,6 @@ TITLES_QUEUE = 'titles'
 class FilterWorker(NoStateWorker):
 
     def __init__(self, worker_id, input_name, output_name, eof_queue, workers_quantity, next_workers_quantity, iteration_queue, eof_quantity, last, log):
-        self.acum = False
         signal.signal(signal.SIGTERM, self.handle_signal)
 
         self.worker_id = worker_id
@@ -46,25 +45,6 @@ class FilterWorker(NoStateWorker):
         self.next_workers_quantity = next_workers_quantity
         self.clients_unacked_eofs = {}
         self.last_clients_msg = {}
-        #
-        self.address = os.getenv("ADDRESS")
-        self.port = int(os.getenv("PORT"))
-        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
-        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.hc_socket.bind((self.address, self.port))
-        self.hc_socket.listen(1)
-        self.health_checker = HealthCheckHandler(self.hc_socket)
-        self.health_check = Process(target=self.health_checker.handle_health_check)
-        self.health_check.start()
-        #
-        self.middleware = None
-        self.queue = queue.Queue()
-        try:
-            middleware = Middleware(self.queue)
-        except Exception as e:
-            raise e
-        self.middleware = middleware
-
         self.stop_worker = False
         self.active_clients = set()
 
@@ -130,14 +110,6 @@ class JoinWorker(MultipleQueueWorker):
 
         self.stop_worker = False
 
-    # def handle_signal(self, *args):
-    #     print("Gracefully exit")
-    #     self.queue.put('SIGTERM')
-    #     self.stop_worker = True
-    #     if self.middleware != None:
-    #         self.middleware.close_connection()
-    #     self.health_check.join()
-
     def remove_active_client(self, client_id): # TODO: I think the msg_ids accumulated can also be erased
         if client_id in self.leftover_reviews:
             del self.leftover_reviews[client_id]
@@ -201,10 +173,6 @@ class JoinWorker(MultipleQueueWorker):
         is_title_filtered = title not in self.clients_acum[client_id]
 
         return (titles_finished or reached_titles_eofs) and is_title_filtered
-
-    #client_id in self.clients_acummulated_queue_msg_ids[TITLES_QUEUE] and 
-    # (self.clients_acummulated_queue_msg_ids[TITLES_QUEUE][client_id] == 'FINISHED' or len(self.clients_unacked_queue_eofs[TITLES_QUEUE][client_id]) == self.eof_quantity_queues[TITLES_QUEUE]) 
-    # and title not in self.clients_acum[client_id]
 
     def add_review(self, client_id, batch):
         """
@@ -348,39 +316,13 @@ class DecadeWorker(NoStateWorker):
         self.stop_worker = False
         self.input_name = create_queue_name(input_name, worker_id)
         self.output_name = output_name
-        #
-        self.address = os.getenv("ADDRESS")
-        self.port = int(os.getenv("PORT"))
-        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
-        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.hc_socket.bind((self.address, self.port))
-        self.hc_socket.listen(1)
-        self.health_checker = HealthCheckHandler(self.hc_socket)
-        self.health_check = Process(target=self.health_checker.handle_health_check)
-        self.health_check.start()
-        #
-        self.middleware = None
         self.eof_quantity = eof_quantity
         self.eof_counter = {}
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
         self.last_clients_msg = {}
-        self.queue = queue.Queue()
-        try:
-            middleware = Middleware(self.queue)
-        except Exception as e:
-            raise e
-        self.middleware = middleware
 
         self.active_clients = set()
-
-    # def handle_signal(self, *args):
-    #     print("Gracefully exit")
-    #     self.queue.put('SIGTERM')
-    #     self.stop_worker = True
-    #     if self.middleware != None:
-    #         self.middleware.close_connection()
-    #     self.health_check.join()
 
     def _create_batches(self, batch, next_workers_quantity):
         """
@@ -416,35 +358,8 @@ class GlobalDecadeWorker(StateWorker):
         self.eof_workers_ids = {}                       # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
         self.clients_acum = {}
-        #
-        self.address = os.getenv("ADDRESS")
-        self.port = int(os.getenv("PORT"))
-        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
-        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.hc_socket.bind((self.address, self.port))
-        self.hc_socket.listen(1)
-        self.health_checker = HealthCheckHandler(self.hc_socket)
-        self.health_check = Process(target=self.health_checker.handle_health_check)
-        self.health_check.start()
-        #
-        self.middleware = None
-        self.queue = queue.Queue()
-        try:
-            middleware = Middleware(self.queue)
-        except Exception as e:
-            raise e
-        self.middleware = middleware
-
         self.clients_acummulated_msgs = {}
         self.unacked_msgs = set()
-
-    # def handle_signal(self, *args):
-    #     print("Gracefully exit")
-    #     self.queue.put('SIGTERM')
-    #     self.stop_worker = True
-    #     if self.middleware != None:
-    #         self.middleware.close_connection()
-    #     self.health_check.join()
 
     def _send_batches(self, workers_batches, output_queue, client_id, msg_id=NO_ID):
         for worker_id, batch in workers_batches.items():
@@ -500,35 +415,8 @@ class PercentileWorker(StateWorker):
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
         self.clients_acum = {}
-        #
-        self.address = os.getenv("ADDRESS")
-        self.port = int(os.getenv("PORT"))
-        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
-        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.hc_socket.bind((self.address, self.port))
-        self.hc_socket.listen(1)
-        self.health_checker = HealthCheckHandler(self.hc_socket)
-        self.health_check = Process(target=self.health_checker.handle_health_check)
-        self.health_check.start()
-        #
-        self.middleware = None
-        self.queue = queue.Queue()
-        try:
-            middleware = Middleware(self.queue)
-        except Exception as e:
-            raise e
-        self.middleware = middleware
-
         self.clients_acummulated_msgs = {}
         self.unacked_msgs = set()
-
-    # def handle_signal(self, *args):
-    #     print("Gracefully exit")
-    #     self.queue.put('SIGTERM')
-    #     self.stop_worker = True
-    #     if self.middleware != None:
-    #         self.middleware.close_connection()
-    #     self.health_check.join()
 
     def acummulate_message(self, client_id, data):
         if client_id not in self.clients_acum:
@@ -584,37 +472,8 @@ class TopNWorker(StateWorker):
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
         self.clients_acum = {}
-        #
-        self.address = os.getenv("ADDRESS")
-        self.port = int(os.getenv("PORT"))
-        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
-        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.hc_socket.bind((self.address, self.port))
-        self.hc_socket.listen(1)
-        self.health_checker = HealthCheckHandler(self.hc_socket)
-        self.health_check = Process(target=self.health_checker.handle_health_check)
-        self.health_check.start()
-        #
-        self.middleware = None
-        self.queue = queue.Queue()
-        try:
-            middleware = Middleware(self.queue)
-        except Exception as e:
-            raise e
-        self.middleware = middleware
-
         self.clients_acummulated_msgs = {}
         self.unacked_msgs = set()
-
-
-    # def handle_signal(self, *args):
-    #     print("Gracefully exit")
-    #     self.queue.put('SIGTERM')
-    #     self.stop_worker = True
-    #     if self.middleware != None:
-    #         self.middleware.close_connection()
-    #     print(self.eof_counter)
-    #     self.health_check.join()
 
     def send_results(self, client_id):
         if not self.last:
@@ -683,34 +542,8 @@ class ReviewSentimentWorker(NoStateWorker):
         self.eof_counter = {}
         self.clients_unacked_eofs = {}
         self.last_clients_msg = {}
-        #
-        self.address = os.getenv("ADDRESS")
-        self.port = int(os.getenv("PORT"))
-        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
-        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.hc_socket.bind((self.address, self.port))
-        self.hc_socket.listen(1)
-        self.health_checker = HealthCheckHandler(self.hc_socket)
-        self.health_check = Process(target=self.health_checker.handle_health_check)
-        self.health_check.start()
-        #
-        self.middleware = None
-        self.queue = queue.Queue()
-        try:
-            middleware = Middleware(self.queue)
-        except Exception as e:
-            raise e
-        self.middleware = middleware
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.active_clients = set()
-
-    # def handle_signal(self, *args):
-    #     print("Gracefully exit")
-    #     self.queue.put('SIGTERM')
-    #     self.stop_worker = True
-    #     if self.middleware != None:
-    #         self.middleware.close_connection()
-    #     self.health_check.join()
 
     def apply_filter(self, data):
         return calculate_review_sentiment(data)
@@ -735,36 +568,9 @@ class FilterReviewsWorker(StateWorker):
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
         self.clients_acum = {}
-        #
-        self.address = os.getenv("ADDRESS")
-        self.port = int(os.getenv("PORT"))
-        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
-        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.hc_socket.bind((self.address, self.port))
-        self.hc_socket.listen(1)
-        self.health_checker = HealthCheckHandler(self.hc_socket)
-        self.health_check = Process(target=self.health_checker.handle_health_check)
-        self.health_check.start()
-        #
-        self.middleware = None
-        self.queue = queue.Queue()
-        try:
-            middleware = Middleware(self.queue)
-        except Exception as e:
-            raise e
-        self.middleware = middleware
-
         self.stop_worker = False
         self.clients_acummulated_msgs = {}
         self.unacked_msgs = set()
-
-    # def handle_signal(self, *args):
-    #     print("Gracefully exit")
-    #     self.queue.put('SIGTERM')
-    #     self.stop_worker = True
-    #     if self.middleware != None:
-    #         self.middleware.close_connection()
-    #     self.health_check.join()
 
     def send_results(self, client_id):
         # Send the results to the query 4 and the QueryCoordinator
