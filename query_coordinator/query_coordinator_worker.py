@@ -1,4 +1,3 @@
-#from serialization import deserialize_titles_message, deserialize_into_titles_dict, ROW_SEPARATOR
 from query_coordinator import QueryCoordinator
 import os
 
@@ -14,8 +13,13 @@ def main():
     eof_quantity = list(map(int, eof_quantity))
     log_data = os.getenv('LOG_DATA')
     log_results = os.getenv('LOG_RESULTS')
+    max_unacked_msgs = int(os.getenv('MAX_UNACKED_MSGS'))
+    eof_quantity = list(map(int, eof_quantity))
+    address = os.getenv('ADDRESS')
+    port = int(os.getenv('PORT'))
 
-    query_coordinator = QueryCoordinator(workers_q1, workers_q2, workers_q3_titles, workers_q3_reviews, workers_q5_titles, workers_q5_reviews, eof_quantity, log_data, log_results)
+    query_coordinator = QueryCoordinator(workers_q1, workers_q2, workers_q3_titles, workers_q3_reviews, workers_q5_titles, workers_q5_reviews, eof_quantity, address, port, log_data, log_results, max_unacked_msgs)
+
     query_coordinator.run()
 
 main()

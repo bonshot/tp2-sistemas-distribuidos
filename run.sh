@@ -4,4 +4,5 @@
 rm -rf persisted_data/*
 
 # Run the system
-docker compose -f docker-compose-test.yaml up --build --remove-orphans
+export COMPOSE_HTTP_TIMEOUT=230
+docker compose -f docker-compose-dev.yaml up --build --remove-orphans

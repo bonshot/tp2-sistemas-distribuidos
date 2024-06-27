@@ -1,12 +1,5 @@
-# <span style="color:#3d24c9"> Arquitectura TP1 </span>
-En este informe se detalla la arquitectura del sistema distribuido que se encargará de hacer las consultas para el sistema de recomendación de libros de Amazon. Tenemos como fin que se trate de un sistema escalable por lo que se ha utilizado una arquitectura de pipe and filter, con lo que cada nodo del sistema anidará múltiples workers que realizarán en paralelo la tarea de un filtro.  
-También hemos decidido que en el sistema las consultas se harán _X (secuencial/paralelo)_ por las ventajas y desventajas plasmadas en la siguiente tabla:
-
-| <span style="color:#0F5309"> Modelo/Aspecto </span> | <span style="color:#349B28">Ventajas</span>                                                                                                                                                                                                                                                                                                  | <span style="color:#349B28">Desventajas</span>                                                                                                                                                                                                                                                                                                                                                                |   |   |
-|----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---|---|
-| <span style="color:#10F0BA">Secuencial</span>     | - El pasaje del mensaje es directo, la respuesta se puede ensamblar mientras se procesa la query<br>- Las operaciones CPU intensive se soportan más ya que la query se procesa una a la vez<br>- Es más escalable ya que utilizamos la misma cantidad de líneas de comunicación y solo cambia la consulta | - Se tiene que cargar toda la información completa para cada query<br>- No se paraleliza el procesamiento de todas las queries a la vez, aumentando el tiempo total requerido<br>- Aumenta el volumen de mensajes en la red al pasar los mismos mensajes de información por cada query que hay                                                                             |   |   |
-| <span style="color:#10F0BA">Paralelo</span>       | - Se realizan las queries en paralelo por lo que se optimiza el tiempo total de consulta<br>- Tenemos toda la información cargada en memoria y se lee al mismo tiempo para todas las queries<br>- Los mensajes respectivos al pase de información de facilitan a las consultas al mismo tiempo            | - Ensamblar las respuestas requiere de más handlers de respuesta, ya que no podemos hacer un pasaje directo de rresultados en procesamiento<br>- Las operaciones CPU intensive se corren en paralelo, por lo que se utilizan más recursos que en secuencial<br>- Se reduce la escalabilidad ya que deberíamos hacer una línea de comunicación por cada query nueva deseada |   |   |
-|                |                                                                                                                                                                                                                                                                                                           |                                                                                                                                                                                                                                                                                                                                                                            |   |   |
+# <span style="color:#3d24c9"> Arquitectura TP2 </span>
+En este informe se detalla la arquitectura del sistema distribuido que se encargará de hacer las consultas para el sistema de recomendación de libros de Amazon, todo mientras es tolerante a fallas de los nodos. Tenemos como fin que se trate de un sistema escalable por lo que se ha utilizado una arquitectura de pipe and filter, con lo que cada nodo del sistema anidará múltiples workers que realizarán en paralelo la tarea de un filtro. 
 
 ## <span style="color:#6e49ad"> Integrantes </span>
 - <span style="color:#09ff05"> Diego Civini </span>
@@ -14,59 +7,78 @@ También hemos decidido que en el sistema las consultas se harán _X (secuencial
 
 ## <span style="color:#9669f0"> Sistema completo </span>
 En la siguiente imagen se puede ver como sera la estructura del sistema completo.  
-<p align="center"><img src="./images/SistemaCompletoRentrega.png" /> </p>
+<p align="center"><img src="./images/SistemaCompletoTP2.png" /> </p>
 
-Empezando por el cliente y el server, el primero se conecta mediante TCP a nuestro server el cual tiene como funcion recibir los datasets y mandarle cada batch a al query coordinator. Este se encargara de parsear cada batch para cada pipeline ya que estos usan distintas columnas del dataset. El query coordinator manda los datasets por diferentes queues,donde cada una va a una query distinta. Ademas, Query Coordinator se encarga de recibir por distintas colas los diferentes resultados de cada pipeline. 
-<p align="center"><img src="./images/InicioSist.png" /> </p>
+En el TP1 teniamos una estructura en donde varios workers de un mismo stage leian de una misma cola y luego escribian en una misma cola. De esta manera da uno iba agarrando mensajes a medida que estuviese disponible. Pero para este TP, se pedia implementar multiples clientes paralelos. Con nuestra vieja estructura esto se nos hacia muy dificil de coordinar y nos traia mas problemas que comodidades. Es por eso que se decidio cambiar toda la estuctura. Para este nuevo TP, cada worker tiene su cola de salida como de entrada. No sucede mas que varios workers leen en una misma cola o escriben en una misma cola. De esta manera, la coordinacion de los EOFs y demas mensajes se hace mucho mas simple, ya que no existe el problema de que un worker le robe un EOF a otro worker. Procedemos a mostrar mas de cerca como se veria por ejemplo la Q1 con esta nueva estructura.
+<p align="center"><img src="./images/PipelineQ1.png" /> </p>
+En la Q1 ahora tenemos 9 colas (y esto porq hay 9 workers porque si hubiese mas, habria mas colas) donde antes habria solo 3 colas (sin importar la cantidad de workers). 
 
-Cada pipeline se encarga de conseguir lo resultados de una query en especifico y eso lo hacen usando diferentes tipos de workers que se encargan de aplicarle un simple tipo de "job" a cada dato recibido.  
+Con esta nueva estructura, hay que tener una manera de saber a que worker mandar el mensaje y como manejar los EOFs. Para entender esto, tenemos los siguiente ejemplos.
 
-<span style="color:#09ff05">**Query 1**</span>: _Título, autores y editoriales de los libros de categoría "Computers" entre 2000 y 2023 que contengan 'distributed' en su título._  
-Este pipeline recibe los datos de los titulos y los pasa por 3 diferentes pools de workers en los que cada pool tiene un filtro distinto a aplicar.
-<p align="center"><img src="./images/Q1SistCompleto.png" /> </p> 
+#### <span style="color:#9669f0"> Comunicacion con multiple colas </span>
+Supongamos una situación donde tenemos 2 filtros los cuales están compuestos por múltiples workers cada uno, a modo de ejemplo usaremos 3 workers.
+Incialmente tendremos una configuración en la que si bien cada worker
+sabe el nombre de su cola de entrada, no sabe el nombre de la de salida.
+<p align="center"><img src="./images/ComunicacionParte1.png" /> </p>  
 
-<span style="color:#09ff05">**Query 2**</span>: _Autores con títulos publicados en al menos 10 décadas distintas._  
-Como en la query anterior, solo se reciben los datos de los titulos los cuale son adquiridos por un pool de workers encargado de hacer el primer filtro. A partir de eso, todos esos workers deberan comunicarle sus datos a un solo worker que acumulara los datos procesados para poder conseguir el resultado.
-<p align="center"><img src="./images/Q2SistCompleto.png" /> </p> 
+Llega un mensaje a la cola del worker 1 del filtro A, entonces se dispone a ver a quien debe mandárselo.
+Utilizando configuraciones iniciales sabe que debe mandarlo a la cola de del filtro B, pero... ¿A qué worker?
+<p align="center"><img src="./images/ComunicacionParte2.png" /> </p> 
 
-<span style="color:#09ff05">**Query 3 y Query 5**</span>: _Títulos y autores de libros publicados en los 90' con al menos 500 reseñas._ _Títulos en categoría "Fiction" cuyo sentimiento de reseña promedio esté en
-el percentil 90 más alto._  
-Para resolver estas queries se necesitan los datos de ambas tablas. Empezando por Q3, primero con un pool de workers se hace el primer filtro de decada del 90' y desde ahi se manda los titulos filtrados al hasher de titulos. Este hasher le indicara a los titulos a que worker deben ir, de esta manera hay un solo worker destinado a contar reseñas de un grupo acotado de titulos. Lo mismo sucedera con los titulos de las reseñas. De esta manera, estos workers que tienen como proposito contar las reseñas de cada titulo, recibiran titulos y sus respectivas reseñas.  
-Siguiendo por Q5, es la misma logica. A los titulos enviados por el Query Coordinator, se los pasa por un pool de workers de filtro de categoria Fiction y luego son enviados al hasher de titulos. Desde ahi son enviados a su respectivo worker en donde tambien llegaran las reseñas de ese titulo, las cuales ya pasaron por un pool de workers que les calcularon el sentimiento. En la ultima etapa, para cada titulo se le genera su promedio de sentimiento de reseña y una vez que se acumularon todos, se envian al calculador de percentil el cual decidira cuales son los titulos que estan por encima del percentil 90.
-Cabe aclarar, que cada uno de esos workers a los que les llegan reseñas y titulos, no leeran reseñas hasta que le termine de llegar todos los titulos.
-<p align="center"><img src="./images/Q5Q3SistCompleto.png" /> </p>
+Para poder decidir a qué worker se lo va a mandar de manera que la carga se encuentre bien
+distribuida entre ellos necesitamos una manera de que se considere el módulo o cantidad de
+workers que se tiene en la siguiente capa de workers y que la decisión de uno entre ellos sea
+igual de probable que el resto. ¡Para eso sirven las funciones de hashing! 
+Entonces para poder saber a qué worker mandará el mensaje decide un número que estará 
+en el rango de ID's de los workers del siguiente filtro utilizando una función de hashing  a
+la que se le puede especificar este módulo. Con eso tendríamos una distribución correcta
+ de los mensajes enviados.
+Asumamos que el hasheo de la primary key de la información nos dió 2 a fines de ejemplificar.
+<p align="center"><img src="./images/ComunicacionParte3.png" /> </p> 
 
-<span style="color:#09ff05">**Query 4**</span>: _10 libros con mejor rating promedio entre aquellos publicados en los 90’
-con al menos 500 reseñas._  
-En este caso se reutiliza los resultados de la query 3. En la query 3 se consiguio la cantidad de reviews por titulo y la suma de los rating. Una vez que Q3 envia esos datos, un pool de workers agarra, genera el promedio y genera su top 10. Una vez que calculo su top 10, se lo envia a un worker muy parecido que lo unico que hara sera acumular todos los top 10 y armar un top 10 global.
-<p align="center"><img src="./images/Q4SistCompleto.png" /> </p>  
+Una vez que sabe el ID del worker al mandará el mensaje, concatena ese ID para completar el nombre
+de la cola que se utilizará para la comunicación mediante el middleware y envía el mensaje a esa cola.
+Luego el siguiente filtro repetirá todo este procedimiento de la misma manera hasta llegar al final del
+pipeline y realizar una comunicación de muchos a uno (explicación en otro apartado)
+<p align="center"><img src="./images/ComunicacionParte4.png" /> </p>
 
-## <span style="color:#9669f0"> Arquitectura C4 </span>
-La arquitectura C4 es una forma de representar la arquitectura de un sistema de software en diferentes niveles de abstracción, cada uno de los cuales se enfoca en diferentes aspectos del sistema.  
-En el nivel 1 se muestra el sistema completo, en el nivel 2 se muestra el sistema dividido en containers y en el nivel 3 se muestran los componentes dentro de los containers y en el nivel 4 se observa la interacción entre el código de cada componente.  
-#### <span style="color:#09ff05">**Nivel 1**</span>
-<p align="center"><img src="./images/c4System.png" /> </p>
-En el primer nivel podemos observar un contexto general de lo que es el sistema completo, donde el usuario interactua con el sistema para hacer consultas o queries y el sistema se encarga de procesar y devolver los resultados.  
+#### <span style="color:#9669f0"> Manejo de EOFs con multiple colas </span>
+Para el caso de la recepción e interpretación de los EOF's o finalización de una operación,
+el cliente del que venga el EOF en medio de la comunicación es indistinto a menos que se trate
+de un acumulador de resultados que requiera de un estado acumulado para poder retornar el 
+resultado final a ese cliente. Por el momento nos centraremos en explicar como funciona el
+mecanismo de EOF para múltiples workers con una cola cada uno.
+Se trata de un mecanismo bastante simple; Supongamos la configuración detallada arriba, 
+con dos filtros de 3 workers cada uno que procesan la información que les llega.
+<p align="center"><img src="./images/ManejoEOFsParte1.png" /> </p>  
 
-#### <span style="color:#09ff05">**Nivel 2**</span>
-<p align="center"><img src="./images/c4Containers.png" /> </p>
-En el nivel 2, adentrandonos más en el sistema, vemos los diferentes containers que hay en el sistema. Un container es externo a este y se trata del cliente quien proveera los datos para que las queries hagan el procesamiento correspondiente. El server se encarga de recibir los datos y enviar los resultados, es la boundary entre el cliente y el sistema, mientras que el query coordinator recibe la información del servidor utilizando el middleware (container RabbitMQ que se encarga de la comunicación entre el resto de containers) y se encarga de distribuir los datos a los pipelines correspondientes. Por último, los pipelines son los encargados de procesar los datos y devolver los resultados al query coordinator, estos están compuestos por los containers "Workers" que realizan la tarea de procesamiento. 
+Cuando le llega un eof a cualquiera sea el worker de un filtro, este necesita esperar a cierta cantidad de EOF, correspondiente
+a la cantidad de  workers del filtro pasado (configurado automáticamente de antemano). Entonces para poder enviar el EOF al
+siguiente filtro primero debe contar esa cantidad de mensajes EOF  de manera que hasta que todos los workers del filtro anterior
+no hayan terminado, no terminarán todos los workers de mi filtro actual.
+Ahora entra un EOF al Worker 1 del Filtro A, asumiendo que este filtro solo necesita 1 EOF para terminar, empieza el proceso de 
+mandar los EOFs al siguiente filtro, entonces deposita un EOF en cada cola del siguiente filtro
+<p align="center"><img src="./images/ManejoEOFsParte2.png" /> </p> 
 
-#### <span style="color:#09ff05">**Nivel 3**</span>
-<p align="center"><img src="./images/c4Component.png" /> </p>
+De manera análoga llegan EOFs tanto al worker 2 como el 3 hasta que cada uno mandó 
+un EOF a cada worker del siguiente filtro, completando los EOFs esperados por ese 
+filtro en cada worker y permitiendo que se repita este proceso.
+<p align="center"><img src="./images/ManejoEOFsParte3.png" /> </p>
 
-#### <span style="color:#09ff05">**Nivel 4**</span>
-##### <span style="color:#09ff05">**Codigo de container de workers**</span>
-Para este container, como vimos en el Nivel 3, tenemos 3 componentes distintos. El primero del que hablaremos es el Middleware component. Este es muy simple ya que nos dejara comunicar las distintas partes de nuestro sistema. Primero tenemos una funcion para inicar la conexion con el broker. Una vez ejecutada podremos escribir o leer atraves de otras 2 funciones. Esto se simplifico con lo que realmente pasa en el codigo del proyecto para poder facilitar la comprension del diagrama. La parte de la inicializacion creacion de una instancia de la clase Middleware la que por dentro al iniciarse ahce la conexion al broker. Luego las partes de lectura y escritura en el codigo se pueden ver como _receive_messages()_ o _subscribe()_ y _send_message()_ o _publish_message()_.  
-Luego tenemos el componente de serializacion. Este componente nos permite de manera consistente usar una misma  serializacion y des-serializacion a lo largo de todo el sistema. Por dentro hay varias funciones que consideran distintos casos y los transforman en uno.  
-Por ultimo, tenemos el job component. Este es muy simple ya que se refiere al trabajo que debe ejecutar el worker. Aqui se recibe un batch de datos, se procesa y se mandan los resultados al siguiente filtro.
-![](./images/c4CodeWorker.png)
-##### <span style="color:#09ff05">**Codigo de container de server**</span>
-Devuelta en este container tenemos los componentes de middleware y serialization previamente explicados. Lo que se agrega es un nuevo componente que tiene una funcion muy simple la cual es fordwardear data. El server es nuestra entidad boundary por ende debe recibir data que viene desde afuera del sistema y enviarla adentor. Lo mismo a la hora de recibir resultados y enviarlos hacia afuera del sistema.
-![](./images/c4CodeServer.png)
-##### <span style="color:#09ff05">**Codigo de container de Query Coordinator**</span>
-Por ultimo tenemos el componente del Query Coordinator. Usando el middleware y el modulo de serializacion, el coordinator puede recibir informacion recien recibida en el sistema y gestionarla de tal manera que le permite a las queries recibir la informacion que cada una necesita y no mas que eso. Ademas, es el encargado de sincronizar los resultados y ir guardandolos hasta que sea el momento de enviarlos.
-![](./images/c4CodeCoordinator.png)
+#### <span style="color:#9669f0"> Server </span>
+El server es nuestro boundary object, y con el agregado de multiples clientes se le hicieron unos cambios. Por cada conexion de un cliente nuevo, el server lanza un proceso llamado DataFordwarder que se encarga de recibir los datos del cliente por TCP y pasarselos por una cola de Rabbit a el QueryCoordinator. Ademas de eso lanza un proceso llamado ResultFordwarder, este es unico y se encarga de recibir los resultados desde el QueryCoordinator y enviarselos al cliente correspondiente.
+
+<p align="center"><img src="./images/EstructuraServer.png" /> </p>
+
+#### <span style="color:#9669f0"> QueryCoordinator </span>
+Del lado del QueryCoordinator pasa algo similar. Recordemos que este worker se encarga de parsear los datos de los clientes dependiendo de lo que necesite cada pipeline y en la parte de resultados, se encarga re juntar todos los resultados del cliente, formatearlos debidamente y enviarlos. Para esto, ambas funcionalidades se dividen en 2 procesos. El ResultsCoordinator y el DataCoordinator.
+
+<p align="center"><img src="./images/EstructuraQueryCoordinator.png" /> </p>
+
+#### <span style="color:#9669f0"> Conexion Server-QueryCoordinator </span>
+Asi se veria como estan conectados ambos workers para la entrada y salida de datos del sistema.
+
+
 ## <span style="color:#9669f0"> Diagrama de robustez </span>
 A continuación podemos observar el diagrama de robustez que nos indica cómo se relacionan las entidades del sistema y la manera de comunicación entre ellas mediante boundaries, controllers y entities.  
 ![](./images/DiagramaRobustez.png)
@@ -75,114 +87,84 @@ A continuación podemos observar el diagrama de robustez que nos indica cómo se
 En el diagrama de despligue podemos ver como se agrupan los diferentes nodos del sistema en diferentes grupos y como se comunican entre ellos.
 <p align="center"><img src="./images/DiagramaDespliegue.png" /> </p>
 
-## <span style="color:#9669f0"> Diagramas de actividad </span>
-En los diagramas de actividad se muestra el flujo de la actividad de cada consulta en el sistema y cómo pasa un mensaje para su procesamiento entre los distintos workers y el middleware.  
-#### <span style="color:#09ff05">**Diagrama de flujo**</span>
-<p align="center"><img src="./images/DiagramaActividadFlujo.png" /> </p>
-Se dá el intercambio de mensajes entre el sistema y el cliente de manera que este último tiene los resultados de las queries al final del flujo.
- 
-#### <span style="color:#09ff05">**Query 1**</span>
-<p align="center"><img src="./images/DiagramaActividadesQ1.png" /> </p>
-Se pasa por los diferentes filtros donde cada uno se encarga de filtrar los datos según su funcionalidad específica. En cada caso siempre se comunican todo mediante el middleware hasta llegar al final donde se envían los resultados al query coordinator.
 
-#### <span style="color:#09ff05">**Query 2**</span>
-<p align="center"><img src="./images/DiagramaActividadesQ2.png" /> </p>
-El worker contador cuenta las décadas distintas en las que un autor ha publicado y luego se envía al worker acumulador que se encarga de acumular los resultados de todos los workers contadores obviando aquellos que ya han sido contados.
+## <span style="color:#9669f0"> Diagrama de logica de Fallas </span>
+En nuestro sistema tenemos varios tipos de workers, y cada tipo es distinto a la hora de manejar las fallas. La mayoria podemos encasillarlos en 2 tipos distintos. Por un lado tenemos la abstraccion Worker. En esta se encuentran la mayoria de los workers del sistema, y podemos dividirla en 2 sub-abstracciones. Por un lado el NoStateWorker, en el cual podemos encontrar workers que no tienen estado de resultados ya que lo unico que hacen es filtar o modificar datos (por ejemplo los filtros de titulos, categorias, etc). La otra sub-abstraccion es el StateWorker que en este caso si tiene un estado por cada cliente en el que va acumulando resultados (por ejemplo el worker que genera el percentil o el que consigue los tops).
+El otro tipo importante es el MultipleQueueWorker. En la abstraccion que hablamos antes, los datos son recibidos por una sola cola. En el MultipleQueueWorker los datos son recibidos por mas de una cola. Esto provoca que se tengan que tener mas consideraciones a la hora sincronizar datos ya que un cliente no termina hasta que se terminen los datos de todas las colas sobre ese cliente. Este tipo de worker lo podemos ver en los JoinWorkers y el ResultsCoordinator. Por ejemplo, en el JoinWorker se reciben datos de 2 colas, una de titulos y otra de reseñas. Entonces para un mismo cliente, el sistema debe aguardar que llegen todos los datos de ambas colas para poder decir que termino con ese cliente.
+<p align="center"><img src="./images/WorkersClases.png" /> </p>
 
-#### <span style="color:#09ff05">**Query 3**</span>
-<p align="center"><img src="./images/DiagramaActividadesQ3.png" /> </p>
-Se filtra primero por la década de los 90 con el mismo filtro que la query 1, se pasan estos títulos filtrados al hasheador de títulos cuyo propósito es distribuir de manera equitativa los títulos entre los workers del siguiente filtro, luego se cuenta las reseñas de cada uno de estos títulos filtrados y se acumulan para luego ver al final si tienen más de 500 reseñas.
+### <span style="color:#9669f0"> NoStateWorker </span>
+Empezamos con uno de los mas simples. El NoStateWorker. Por cada mensaje que recibe, primero debe fijarse si se trata de un mensaje de EOF o un mensaje de datos. Si es un mensaje de datos, debe fijarse el id del mismo (msg_id) y del cliente. Si para ese cliente ya se habia recibido un mensaje con ese msg_id, entonces se esta recibiendo un mensaje repetido. En este caso directamente se le hace ack inmediatamente ya que no nos sirve para nada mas. En caso contrario, hay que guardarse ese msg_id. A partir de ahi, si el mensaje es de un cliente nuevo, este tendra un client_id que no se tenia registrado en _active_clients_. Una vez registrado se escribe en memoria el nuevo _active_clients_ y se procede a procesar, enviar y ackear el mensaje. 
+Por el lado del EOF, para chequear repetidos, cada mensaje EOF contiene el id del cliente y el id del worker de donde viene. De esta manera si me llega un EOF del cliente con id 4 desde el worker con id 0, ya se que para ese mismo cliente no me puede llegar un EOF desde ese mismo worker. Cada delivery_tag de los EOF es guardado hasta que lleguen todos los EOFs necesarios (el manejo de los EOFs esta explicado al principio en la seccion **Sistema Completo**). Una vez que sucede, se mandan los EOFs a la siguiente etapa, se actualiza en disco el _active_clients_ y se hace ACK de todos los EOFs que se habian acumulado.
 
-#### <span style="color:#09ff05">**Query 4**</span>
-<p align="center"><img src="./images/DiagramaActividadesQ4.png" /> </p>
-Esta query reutiliza los resultados de la query 3 para calcular el promedio de rating de los libros. A partir de estos promedios, varios workers generan sus propios top 10. Una vez que no llegan mas datos envian sus top 10 a un acumulador. Este ultimo worker se encarga de conseguir el top 10 entre todos los top 10 recibidos y ese es el resultado del pipeline.
+<p align="center"><img src="./images/DiagramaFallasNoStateWorker.png" /> </p>
 
-#### <span style="color:#09ff05">**Query 5**</span>
-<p align="center"><img src="./images/DiagramaActividadesQ5.png" /> </p>
-Filtramos por categoría "Fiction", se calcula el sentimiento de las reseñas y se pasa al hasher de títulos para que mande los títulos a los workers correspondientes. Luego se calcula el promedio de sentimiento de cada título y se acumulan los resultados para finalmente calcular el percentil 90 y devolver los títulos que cumplen con la condición.
+### <span style="color:#9669f0"> StateWorker </span>
+Dentro de la misma familia donde se ecuentra NoStateWorker, encontramos al StateWorker. Estos a diferencia de la abtraccion anterior, por cada cliente acumulan los mensajes hasta que le lleguen los EOFs necesarios. Es en ese momento cuando mandan su acumulado seguido de un EOF. Como podemos ver tambien empieza fijandose si recibio un EOF o un mensaje dee datos y se fija el id del mensaje para ver si es repetido. Todo eso es igual a en el worker anterior. Cuando es un mensaje de datos, la logica si cambia. En este caso, los workers acumulan N mensajes. Acumular significa agregar los datos nuevos al acumulado de datos de ese cliente, guardarse el delivery_tag para luego hacerle ACK y guardarse el msg_id para poder detectar duplicados en el futuro. Una vez que le llega el mensaje N, persiste todos esos datos a disco y hace ACK de todos los mensajes acumulados.
+Con los EOFs la primera parte es igual que en el NoStateWorker. Pero una vez que llegan todos los EOFs necesarios, hay que hacer un par de cosas mas. Lo primero es chequear si quedaron mensajes sin hacerles ACK. Anteriormente dijimos que cuando llega el mensaje N, se le hace ACK a todos los mensajes acumulados. Pero si llegaron M mensajes, con M < N, y despues empiezan a llegar los EOFs, hay M mensajes los cuales nunca van a ser ackeados ni persistidos a disco. Es por eso que hacemos este chequeo. Una vez hecho el chequeo, se manda el acumulado, el EOF y se le hace ACK a todos los EOFs acumulados.
 
-#### <span style="color:#09ff05">**Manejo de EOF entre workers de filtros**</span>
-<p align="center"><img src="./images/DiagramaActividadesEOFFilters.png" /> </p>
-Un worker puede ser líder o no lider, si no lo es simplemente recibe mensajes hasta que este sea un EOF y en ese caso lo manda al líder. El líder hace lo mismo pero en caso de recibir un EOF espera que todos los workers le manden un EOF para poder mandar los EOFs a la siguiente etapa de workers.  
-Una vez que los workes mandan el EOF a su lider, esperan por el mensaje OK del lider para poder comenzar con la siguiente iteracion. Este mensaje OK lo manda el lider una vez que le llegaron todos los EOFs. De esta manera coordinamos que todo el grupo de workers en una etapa se coordinen a la hora de mandar los EOFs y comenzar con la siguiente iteracion, la cual estara trabajando con otro cliente. Este tipo de coordinacion se puede ver en etapas como las de la query 1, las etapas de calcular sentimiento y filtro de categoria de Fiction en la query 3, y por ultimo la etapa de filtro de decada 90 en la query 3.  
+<p align="center"><img src="./images/DiagramaFallasStateWorker.png" /> </p>
 
-#### <span style="color:#09ff05">**Manejo de EOF entre workers con acumuladores**</span>
-<p align="center"><img src="./images/DiagramaActividadesEOFAcumuladores.png" /> </p>
-Hay otros casos en donde los workers de una etapa no necesitan sincronizar sus EOFs, pero si deben sincronizarse para saber cuando empezar su siguiente iteracion. Estos son los casos de las queries 4, 2 y las ultimas etapas de las queries 3 y 5.  
-Lo que sucede en este caso es que cada workere no acumulador envia su EOF al worker acumulador. Este tiene informacion de cuantos workers hay en la etapa anterior, entonces cuando recibe esa cantidad de EOFs este envia los mensajes OK a los workers anteriores. Estos, que se habian quedado esperando luego de mandar el EOF al acumulador, entienden que pueden seguir con la nueva iteracion.
+### <span style="color:#9669f0"> MultipleQueueWorker </span>
+Ahora si, con la otra familia de workers. Como dijimos, estos se encargan de recibir datos de mas de una cola al mismo tiempo. Por el lado de los mensajes de datos, es igual que el StateWorker, ya que estos tambien son acumuladores. La unica diferencia en este sentido es que acumulan N mensajes por cola. Osea si uno de estos workers recibe por 2 colas, en ambas va a teener su contador y si en una llega a los N mensajes, se ackean los N mensajes solo de esa cola, los acumulados de la otra cola no.
+En el manejo de los EOFs, si se hacen las cosas diferentes. Si me llegan todos los EOFs de una cola antes sifnificaba que eel cliente ya habia terminado entonces se podian mandar los reesultados. En este caso, hay que chequear si tambien llegaron los EOFs de las demas colas. Entonces cada vez que en una cola llegan todos los EOFs se chequea si ya sucedio eso tambien en las demas colas. Si no sucedio, se marca como terminada esa cola y se sigue normal. Pero si ya sucedio, entonces signfica que todos estaban esperando a que termine esa cola y que ya se puede enviar los resultados acumulados de ese cliente.
+
+<p align="center"><img src="./images/DiagramaFallasMultipleQueueWorker.png" /> </p>
+
+### <span style="color:#9669f0"> Casos particulares </span>
+En el sistema hay algunos casos que no se pudieron encasillar en las abstracciones mencionadas anteriormente ya que eran muy particulares. Estos estan en el Server (nuestro boundary object) y en uno de los procesos del QueryCoordinator, el DataCoordinator.
+
+#### <span style="color:#9669f0"> DataCoordinator </span>
+Como explicamos antes, el QueryCoordinator tiene 2 partes, el ResultCoordinator y el DataCoordinator. El ResultCoordinator recibe todos los resultados de varias colas y es por eso que hereda funcionalidad de la abstraccion MultipleQueueWorker. Pero el DataCoordinator tenia sus particularidades y es unico. En la parte de los EOFs es igual a los demas. Por cada EOF se guarda su delivery_tag y cuando le llegan todos, sabe que el cliente termino. En este caso, por cada cliente le tienen que llegar 2 EOFs, el primero indica que ya se mandaron todos los titulos y el segundo indica que ya se mandaron todas las reseñas. El DataCoordinator se guarda esta informacion por cada cliente. Si ya le llego el EOF de titulos marca al cliente como que esta en modo reseñas. En este modo, sabe que si llega un EOF de titulos, se trata de un EOF repetido. Con la llegada de mensajes, el parse mode (titulos o reseñas) es importante ya que le indica como debe parsear los mensajes para mandarselo a cada query. Todo esto se va persistiendo en disco antes de hacerle ACK a los mensajes.
+
+<p align="center"><img src="./images/DiagramaFallasDataCoordinator.png" /> </p>
+
+#### <span style="color:#9669f0"> Server </span>
+El Server es nuestro boundary object, por ende usa TCP para comunicarse con los clientes y esto trae nuevas consideraciones. Como mencionamos antes, el Server tiene 2 procesos principales, el ResultFordwarder y el DataFordwarder.
+
+El DataFordwarder es el mas simple. Se crea uno de estos procesos por cada cliente conectado y recibe todos los datos de ese cliente. Por cada mensaje recibido por TCP, manda un ACK tambien por TCP al cliente. Una evez que ya se mandaron todos los mensajes, el proceso termina. Pero hay que tener una cosa en cuenta, que pasa si el cliente ya mando todos sus mensajes, el proceso DataFordwarder de ese cliente termino y se cae el server. En este caso, cuando se levante el server y se vuelva a conectar el cliente, el server tiene que saber si ese cliente tiene todavia datos para mandar entonces hay que crearle un DataFordwarder o si ya termino de mandar sus datos entonces no hay que crearle un DataFordwarder. Esto el server lo sabe mirando el estado del cliente. Como podemos ver en el diagrama, el DataFordwarder cuando ya termino con el cliente, actualiza el estado del clieente en disco para que despues se sepa si el cliente esta en un estado en el cual espera resultados o en un estado en el cual todavia debe enviar datos.
+
+Por el lado del ResultFordwarder, este recibe por una multiprocessing Queue los sockets de los clientes a los que debe mandarle resultados. Si le llegan los resultados de un cliente, se los envia y lo borra del estado en disco. Todo esto mientras le haya llegado el socket del cliente. Si no le llego, significa que todavia el cliente no se volvio a conectar. El sistema le da 10 segundos al cliente para volver a conectarse. Si no lo logra, sus resultados seran desechados y su estado eliminado, entendiendo que el cliente fallo y que si quiere el serevicio debera mandar todos los datos devuelta.
+
+<p align="center"><img src="./images/DiagramaFallasServer.png" /> </p>
+
+## <span style="color:#9669f0"> Container Coordinators y Elección de Líder </span>
+En el sistema, para poder manejar las caídas de los nodos o containers que se puedan dar en complemento a la lógica de fallos que mantiene el estado luego de una caída, se implementó una abstracción llamada ContainerCoordinator. Esta abstracción se encarga de manejar en simultáneo a todos los contenedores del sistema mediante "HealthChecks" y de elegir un líder entre ellos tanto en la secuencia de inicio como cuando muere el líder actual.  
+El líder es el encargado de manejar el HealthChecking con todo el resto de contenedores del sistema (exceptuando el cliente ya que es una simulación de uno ajeno al sistema).  
+En caso de que el líder caiga, alguna replica ContainerCoordinator se encargará de performar una elección de líder de manera que a pesar de que se caiga quien verifica el estado del sistema, siempre haya alguien que lo pueda hacer mientras se levanta el que se cayó.  
+### <span style="color:#9669f0"> Conexión entre Container Coordinators </span>
+Para la conexión entre instancias de esta abstracción se decidió utilizar TCP/IP para poder comunicarlos y tener una certeza sobre los estados del socket actual con el que se está comunicando, de manera que sea notable si alguna conexión se cayó y se pueda proceder con la elección de líder.  
+Dicha conexión consta de 3 partes:
+- **Reconexión**: Al comenzar la ejecución, obligatoriamente verificará si tiene entre sus conexiones existentes a todos los demás ContainerCoordinator, en caso de no tenerlos se reconectará con todos ellos.
+- **Extremo de escucha**: Una vez establecida una conexión, cada ContainerCoordinator tiene un extremo de escucha que se encarga de recibir mensajes de los demás ContainerCoordinator y de responder a los mensajes que le llegan. Esto incluye la lógica de propagación de la elección de líder y autoproclamación de líder.
+- **Recepción de futuras conexiones**: En todo momento mientras hace el handling de conexiones ya establecidas en un proceso aparte, el ContainerCoordinator está escuchando para poder establecer nuevas conexiones con otros ContainerCoordinator que se puedan levantar en el futuro, por ejemplo si se cayó previamente alguno de ellos.    
+
+Para poder lograr la sincronización entre dichos procesos, mantener y actualizar el estado de las conexiones junto a los sockets de las mismas, se decidió utilizar la abstracción útil que posee mecanismos de sincronización dentro de sí, _**Manager**_ que nos provee de clases estándar de Python como _**Dict**_ que nos permiten mantener la integridad de los datos y la sincronización a través de los procesos.  
+### <span style="color:#9669f0"> Elección de Líder </span>
+Para la elección de líder se decidió implementar el algoritmo de elección de líder de Bully. Este algoritmo se basa en que cada ContainerCoordinator tiene un ID único y cuando uno detecta que el líder actual no está respondiendo, le envía un mensaje de elección a todos los demás que tengan un ID mayor al suyo. Estos propagarán la elección de manera análoga a todos sus mayores hasta que el mensaje llegue a quien tiene mayor ID entre los coordinadores y este al ver que nadie más de ID mayor le responde (O la conexión está muerta), se autoproclama líder y lo comunica a todos los demás mediante un mensaje de COORDINATOR.  
+
+En caso de recibir un mensaje `COORDINATOR <id>`, el ContainerCoordinator va a actualizar estados como el de si él mismo es líder o no y si debe cerrar los recursos que actualmente está utilizando para comunicarse con todo el sistema para los HealthChecks, asegurando así una transición correcta de líderazgo.  
+
+En cambio si es él quien debe convertirse en el líder, después de autoproclamarse y comunicarlo al resto actualizará los mismos estados pero en favor de ser líder y comenzará instantáneamente a intentar establecer HealthChecks con los demás coordinadores (por ende levantando al líder anterior que cayó) y los containers del sistema.  
+
+### <span style="color:#9669f0"> HealthChecks </span>
+Los HealthChecks son mensajes que se envían entre los ContainerCoordinator y con el resto del sistema para verificar que todos los contenedores del sistema estén activos y respondiendo. Estos mensajes se envían cada cierto tiempo y si no se recibe respuesta en un tiempo determinado, se considera que el contenedor que no respondió está caído y se procede con el reinicio del mismo. De todas maneras, al handling o recepción de HealthChecks podemos dividirlos en aquellos que realizan los coordinadores que poseen timeouts y aquellos que realiza el resto del sistema (Server, QueryCoordinator, Workers) que no poseen timeout y simplemente responden a los mensajes de HealthCheck que les llegan.
+#### <span style="color:#9669f0"> HealthChecker </span>
+La abstracción HealthChecker se encarga de enviar mensajes de HealthCheck a los ContainerCoordinator y de recibir los mensajes de respuesta de los mismos. En caso de que no reciba respuesta en un tiempo determinado, se considera que el contenedor con el que se estaba comunicando está caído y se procede con su reinicio.  
+- Si el chequeo es hacia un coordinador se tiene menos tolerancia o espera respecto a la conexión inicial que se hace para intercambiar mensajes, esto es debido a que los ContainerCoordinator son los encargados de manejar los HealthChecks, por lo que si uno está caído tiene prioridad al reinicio para garantizar una mejor disponibilidad en el sistema y que haya activas la mayor cantidad de réplicas de este tipo posibles.  
+- En cambio con los workers se tiene un poco más de tolerancia para el establecimiento de la conexión ya que los mismos pueden estar cargando o procesando cierta información que demore el handling de la conexión, por lo que antes del reinicio se espera un poco más.  
+
+El _**mecanismo de conexión inicial**_ que se utiliza es _**reconnection with exponential backoff**_ el cual consiste en que si no se logra establecer la conexión con el contenedor en un tiempo determinado, se espera un tiempo exponencialmente mayor al anterior intento para volver a intentar la conexión. Esto se hace para evitar saturar al contenedor con intentos de conexión fallidos y para darle tiempo a que se levante si es que se cayó. La cantidad de intentos varía, como se mencionó en el párrafo anterior, según si el contenedor es un coordinador o no.
+
+#### <span style="color:#9669f0"> HealthCheckHandler </span>
+Esta abstracción se encarga de recibir y responder los HealthChecks que manda el HealthChecker. Debería haber una instancia en cada Worker, Server, QueryCoordinator y ContainerCoordinator para poder recibir chequeos en todo momento desde el comienzo de su ejecución.  
+Tenemos dos tipos de handling:
+- **Handling de HealthChecks con timeout**: En este caso, utilizado principal y únicamente por ContainerCoordinators, se tiene un tiempo determinado para responder al HealthCheck, si no lo hace en ese tiempo se considera que está caído y se procede con una elección de líder antes explicada de manera que se propague la noticia de que cayó el líder así como la elección para tener uno nuevo lo antes posible.
+- **Handling de HealthChecks sin timeout**: En este caso, utilizado por el resto del sistema, simplemente se responde al mensaje de HealthCheck que llega y se actualiza el estado de la conexión con el contenedor que lo envió. En caso de que se interrumpa la conexión de healthchecking, el levantamiento y elección se manejará entre coordinadores, por lo que no es responsabilidad hacer ningún tipo de elección ni nada, solo esperar por una nueva conexión en la misma instancia de HealthCheckHandler por el nuevo coordinador que venga.  
+
+Para poder lograr que cualquier container se dé cuenta de que la conexión se cayó, de nuevo, se utiliza TCP/IP para poder tener una certeza de que la conexión se cayó y no se está recibiendo nada. Al haber conexión en este protocolo se asegura que al momento que se termina la misma habrá una excepción al intentar enviar o recibir algo de un socket que ya no está conectado.
 
 ## <span style="color:#09ff05">**Protocolo de comunicacion y serialiazacion**</span>
-El protocolo en cuanto a la comunicación cliente-servidor es muy simple. Se usa un header que siempre tendra un largo de 4 bytes. En este header se informa la longitud del mensaje. Entonces si tenemos el mensaje "Hola!", el header sera "0005" y el mensaje completo que se envia por el socket sera "0005Hola!". Para evitar un short-write, se envia el mensaje y se va contando cuantos bytes se escribieron. Si no se escribieron todos los bytes, se sigue enviado desde el byte que no se pudo escribir en el socket. Del lado del lector, este sabe que siempre primero tiene que leer 4 bytes, asi consigue el header y sabe cuantos bytes mas tiene que leer para conseguir el mensaje completo. No para de hacer intentos de leer el socket hasta que no se haya leido la cantidad de bytes indicada por el header.  
-Además, para poder complementar el protocolo y evitar manejar strings, se serializa todo lo que se envía y encapsula la responsabilidad del encoding y decoding en el servidor con una estructura `Message` que tiene un contenido y un _stop state_ de forma que si ya está terminado el mensaje, ya no se pueda escribir más (útil en el caso de esperar un EOF para saber cuando el mensaje posee todos los resultados).  
-En cuanto a la serialización, se implementa una librería propia de la misma para poder serializar y deseralizar mensajes acorde a las necesidades de los datos, por ejemplo hay casos en los que necesitaremos mandar batches completos de datos y otros en los que solo necesitaremos mandar un dato en particular, en su mayoría manejándonos con diccionarios para poder separar los datos de manera clara en un formato {key: value}. Para ello utilizamos separadores custom que definen si se trata del final de un dato en particular o de una tanda de datos. Esta serialización soporta distintos formatos como ser un set, lista, diccionario y demás, y se encarga de la serialización de manera consistente usando como convención los separadores definidos como constantes que se importan a lo largo del sistema para poder mantener los datos limpios acorde a este protocolo.  
-Más en lo específico se detallarán las funciones proveidas por la librería de serialización:  
-Un item está compuesto por múltiples columnas o campos separados por el separador `@|@`, un batch está compuesto por múltiples items separados por el separador `$|$`, y en cuanto a la utilización de diccionarios, para separar claves de valores usamos `#|#`, y cuando encontramos múltiples valores en un campo usamos `,`.  
-- `serialize_message`: recibe listas de items y los serializa en un string
-- `serialize_item`: recibe una item y lo serializa en un string sacando los posibles saltos de línea
-- `serialize_dict`: recibe un diccionario y lo serializa en un string usando los separadores definidos, además verifica si el valor es un set o una lista para serializarlo de manera correcta usando `serialize_set` o `serialize_list`.
-- `serialize_set`: recibe un set y lo serializa en un string usando el separador de múltiples valores.
-- `serialize_list`: recibe una lista y lo serializa en un string usando el separador de múltiples valores, además pasando a string valores que podrían ser numéricos.
-- `deserialize_item`: contraparte directa de `serialize_item`, recibe un string y lo deserializa en un item.
-- `deserialize_titles_message`: recibe una lista de múltiples diccionarios serializados y los deserializa utilizando `deserialize_into_titles_dict`.
-- `deserialize_into_titles_dict`: recibe un string y lo deserializa utilizando el field separator `#|#` y el value separator `,` para separar claves de valores y múltiples valores en un campo, logrando un diccionario de títulos.  
-De esta manera, contando con estas funciones el flujo de un mensaje sería:  
-1. El cliente usa un lector de archivo que produce rows representadas con un diccionarios usando `serialize_dict`, utiliza `serialize_message` para serializar múltiples rows acorde a los separadores mencionados y envía el mensaje al servidor.
-2. Se hace el pase del mensaje hasta cada worker que lo deserializa con `deserialize_titles_message` para poder trabajar con los datos y luego serializarlos mediante `serialize_message([serialize_dict(result)])` de nuevo para enviarlos al siguiente worker o al query coordinator.
-3. El query coordinator recibe los resultados y los deserializa con `deserialize_titles_message` para poder trabajar con ellos y enviarlos al servidor de nuevo.
-
-## <span style="color:#9669f0"> Mejoras </span>
-Para la reentrega se hicieron ciertos cambios que mejoran la performance del tp. Lo primero que se hizo fue sacar el exchange "data". Este exchange era la manera que tenia el _QueryCoordinator_ de enviarle a cada pipeline los datos de los datasets y los EOFs. En este exchange existian varios topicos, entre ellos EOF_reviews y EOF_titles. Estos se usaban para informarle a cada pipeline que ya se habia mandado toda la informacion disponible. Pero en el primer filtro de cada pipeline podia haber distinta cantidad de workers. Entonces si en el pipeline de la query 5 habia 6 workers esperando a que le lleguen los EOFs con el topico EOF_reviews, pero en el pipeline de la query 3 habia solo 3 workers que esperaban lo mismo, el _QueryCoordinator_ enviaba 6 EOFs por ese topico. En el pipeline 5 de iban a leer todos los EOFs pero en el pipeline 3 sobrarian 3 que quedaban encolados en la cola sin sere leidos. Esto en este tp no generaba problemas, pero si despues se necesitaba soportar multiple clientes, estos EOFs sobrantes generarian problemas. Es por eso que se decidio sacar este exchange y usar colas para cada pipeline. De esta manera el _QueryCoordinator_ se le informa cuantos EOFs tiene que enviar a cada cola y no sobraran EOFs.   
-
-Otra de los problemas que se tenia, era el tiempo que tardaba en ejecutarse con el dataset completo. Para mejorar esto, se trato de identificar nuestro cuello de botella y se llego a la conclusion de que se encontraba en las queries 3 y 5. Mas especificamente en las partes de el hasheador por titulo en adelante. Para ambas queries se usa el mismo worker que recibe un batch de titulos o reviews y con eso hashea el titulo y lo envia al siguiente worker correspondiente. Al hacer esto, se genera 1 mensaje por cada titulo o review recibida. El problema no es tanto la cantidad de estos mensajes sino el rate en el cual los siguientes workers procesaban y les hacian aknowledge. Se habia elegido un prefetch_count=1 para que en casos en los que varios workers leen de una misma cola, no lean el EOF de otro de los workers del mismo filtro. Pero los workers que viene despues del hasheador por titulo tienen una cola para cada uno. Al darnos cuenta de eso, se le agrego al middleware la posibilidad de elegir el prefetch_count para que estos workers lo puedan aumentar y de esta manera agilizar esa seccion. Esto tuvo grandes resultados ya que ahora una ejecucion completa con el dataset original, tarda menos de 30 min cuando antes de esta mejora tardaba 60 min.  
-
-Por ultimo, para la entrega no teniamos el handleo de SIGTERM. Ahora todos los workers lo tienen. Esto se hace declarando un handler para esta señal en donde se cierran los recursos adecuados para poder cerrar todo de forma debida. Aparte de esto, teniamos _time.sleep()_ para poder conectarnos a tiempo a rabbit. Esto ahora ya no esta y se reemplazo haciendo que en la libreria del middleware, a la hora de querer conectarse al broker, se intenta una cantidad N de veces con cada intento esperando el doble de tiempo que en el anterior. De esta manera le damos varias chances a los workers a conectarse mientras el broker todavia se esta iniciando. Para combinar el handleo de SIGTERM con este nuevo tipo de conexion, al middleware se le pasa una cola. En esta cola se inserta un mensaje desde el handler del SIGTERM. De esta manera el middleware en cada loop se fija si tiene un mensaje en esa cola, yya que si lo tiene es porque debe detener la conexion.
-
-
-## <span style="color:#9669f0"> Resultados </span>
-
-Corrimos el sistema con el dataset completo y aca procedemos a mostrar los resultados de las queries 1,2,3,4 para que quede registro de que nuestro sistema devuelve. No mostramos de la query 5 ya que no tiene sentido por como devuelve y no se entiende.  
-Los resultados difieren con lo que se hace en el codigo de la catedra. Pero esto sucede porque notamos que en el codigod e la catedra habia ciertos errores/inconsistencias.
-En `Q1` en la catedra se hace la siguiente linea para ver si un libro pertenece a la categoria _'Computers'_:  
-`data_filtered = data_filtered[data_filtered['categories'] == "['Computers']"]`
-Esto solo elige los titulos que solo pertenecen a la categoria 'Computers', pero si un libro pertenece a las categorias ['Computers', 'Technology'] no serian considerados. Nosotros optamos por esta opcion. Pero luego en el codigo de `Q5`, para chequear si un titulo pertenece a la categoria _'Fiction'_ hacen la siguiente linea:  `data_sanitized[data_sanitized['categories'].str.contains('fiction')]`.  
-Con esto se agarran casos como titulos con la categoria 'Scienci Fiction' o 'Non Fiction'.  
-
-Luego en Q2 se hace la linea data_sanitized.explode('authors'). Esto esta mal ya que la columna 'authors' tiene strings y al hacer explode no se hace nada. Por ende si un titulo tiene mas de un autor, no se separan y se toma como uno solo
-
-
-#### <span style="color:#09ff05">**Resultados Q1**</span>
-<p align="center"><img src="./images/ResultsQ1.png" /> </p>
-
-#### <span style="color:#09ff05">**Resultados Q2 y Q3**</span>
-<p align="center"><img src="./images/ResultsQ2&Q3-1.png" /> </p>
-<p align="center"><img src="./images/ResultsQ3-2.png" /> </p>
-<p align="center"><img src="./images/ResultsQ3-3.png" /> </p>
-
-#### <span style="color:#09ff05">**Resultados Q4**</span>
-<p align="center"><img src="./images/ResultsQ4.png" /> </p>
-
-
-
-## <span style="color:#9669f0"> Division de tareas </span>
-| Container  | Tarea                               | Integrante    |   |   |
-|------------|-------------------------------------|---------------|---|---|
-| Middleware | Protocolo de comunicacion           | Diego/Facundo |   |   |
-|            | Modulo de serializacion             | Diego         |   |   |
-|            | Modulo de comunicacion              | Diego/Facundo |   |   |
-| Client     | Web-Scraper                         | Facundo       |   |   |
-|            | Results Receiver                    | Facundo       |   |   |
-| Server     | Client Manager                      | Diego         |   |   |
-|            | Data redirectioner                  | Facundo       |   |   |
-| Worker     | Filtro categoria                    | Diego         |   |   |
-|            | Filtro titulo con "distributed"     | Facundo       |   |   |
-|            | Filtro entre 2000 y 2023            | Diego         |   |   |
-|            | Contador de decadas por autor       | Facundo       |   |   |
-|            | Acumulador de contadores de decadas | Diego         |   |   |
-|            | Filtro decada 90'                   | Facundo       |   |   |
-|            | Contador reseñas                    | Diego         |   |   |
-|            | Filtro 500 reseñas                  | Facundo       |   |   |
-|            | Calculador promedio de rating       | Diego         |   |   |
-|            | Creador top 10                      | Facundo       |   |   |
-|            | Calculador de sentimiento           | Diego         |   |   |
-|            | Acumulador de sentimientos          | Facundo       |   |   |
-|            | Calculador del percentil 90         | Diego         |   |   |
+En cuanto a la serializacion, sigue siendo igual de como se explico en el TP1. Pero se hicieron un par de agregados. Primero, se necesitaba una forma de identificar los mensajes de los distintos clientes que estan en paralelo. De esto se encarga el Server. Por cada conexion que recibe de un cliente nuevo, el Server le asigna un id que es un valor incremental. Desde ahi, cada mensaje recibido de ese cliente tiene delante el id del cliente. De esta manera, cada worker sabe que cuando recibe un mensaje debe separar lo que es el contenido del mensaje con el id del cliente.
+Ademas de este id del cliente, cada mensaje tiene un id propio. Este id nace desde la libreria que tiene el cliente, la cual le agrega un id al mensaje antes de mandarlo para que despues cuando el server haga ACK, este sepa de que mensaje se esta hablando. Este id luego se usa en el sistema para que los workers los usen para identificar mensajes repetidos en caso de que los haya.
+Entonces, cada worker cuando le llega un mensaje sabe que tiene que sacarle el id del mismo y el del cliente. Todo esto se hace con una misma funcion del modulo de serializacion.

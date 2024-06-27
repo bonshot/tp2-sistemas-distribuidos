@@ -4,7 +4,12 @@ from serialization import *
 import signal
 import queue
 from logger import Logger
-from worker_class import NoStateWorker, StateWorker, Worker
+from worker_class import NoStateWorker, StateWorker, MultipleQueueWorker
+import socket
+import os
+from multiprocessing import Process
+from communications import read_socket, write_socket
+from healthchecking import HealthCheckHandler
 
 YEAR_CONDITION = 'YEAR'
 TITLE_CONDITION = 'TITLE'
@@ -17,6 +22,8 @@ ACUMS_KEY = 'acums'
 ACUM_TITLES_MSG_KEY = 'acum_titles_msgs'
 ACUM_REVIEWS_MSG_KEY = 'acum_reviews_msgs'
 LEFTOVER_REVIEWS_KEY = 'leftover_reviews'
+REVIEWS_QUEUE = 'reviews'
+TITLES_QUEUE = 'titles'
 
 
 class FilterWorker(NoStateWorker):
@@ -39,6 +46,17 @@ class FilterWorker(NoStateWorker):
         self.next_workers_quantity = next_workers_quantity
         self.clients_unacked_eofs = {}
         self.last_clients_msg = {}
+        #
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+        #
         self.middleware = None
         self.queue = queue.Queue()
         try:
@@ -50,13 +68,6 @@ class FilterWorker(NoStateWorker):
         self.stop_worker = False
         self.active_clients = set()
 
-    def handle_signal(self, *args):
-        print("Gracefully exit")
-        self.queue.put('SIGTERM')
-        self.stop_worker = True
-        if self.middleware != None:
-            self.middleware.close_connection()
-
     def set_filter_type(self, type, filtering_function, value):
         self.filtering_function = filtering_function
         self.filter_condition = type
@@ -66,10 +77,10 @@ class FilterWorker(NoStateWorker):
         return filter_by(data, self.filtering_function, self.filter_value)
 
 
-class JoinWorker(StateWorker):
+class JoinWorker(MultipleQueueWorker):
 
-    def __init__(self, worker_id, input_titles_name, input_reviews_name, output_name, eof_quantity_titles, eof_quantity_reviews, query, iteration_queue, log):
-        self.acum = True
+    def __init__(self, worker_id, input_titles_name, input_reviews_name, output_name, eof_quantity_titles, eof_quantity_reviews, query, log, max_unacked_msgs):
+        self.acum = False
         signal.signal(signal.SIGTERM, self.handle_signal)
         self.stop_worker = False
 
@@ -81,27 +92,36 @@ class JoinWorker(StateWorker):
         self.input_titles_name = create_queue_name(input_titles_name, worker_id)
         self.input_reviews_name = create_queue_name(input_reviews_name, worker_id) 
         self.output_name = output_name
-        self.iteration_queue = iteration_queue
-        # For titles queue
-        self.eof_counter_titles = {}
-        self.eof_workers_ids_titles = {}                # This dict stores for each active client, the workers ids of the eofs received in the titles queue
-        self.eof_quantity_titles = eof_quantity_titles
-        self.clients_unacked_eofs_titles = {}
-        self.clients_acummulated_titles_msgs = {}
-        self.unacked_titles_msgs = set()
-        # For the reviews
-        self.eof_counter_reviews = {}
-        self.eof_workers_ids_reviews = {}               # This dict stores for each active client, the workers ids of the eofs received in the reviews queue
-        self.eof_quantity_reviews = eof_quantity_reviews
-        self.clients_unacked_eofs_reviews = {}
-        self.leftover_reviews = {}
-        self.clients_acummulated_review_msgs = {}
-        self.unacked_reviews_msgs = set()
+        self.max_unacked_msgs = max_unacked_msgs
+
+        # This dict stores for each active client, the delivery tags of the unacked EOFs for each query.
+        self.clients_unacked_queue_eofs = {TITLES_QUEUE: {}, REVIEWS_QUEUE: {}}
+        # We have to keep record of the msg_ids received for each client in each query  
+        self.clients_acummulated_queue_msg_ids = {TITLES_QUEUE: {}, REVIEWS_QUEUE: {}}
+        # For each query, we save the delivery_tags of the unacked messages so they can be acked later  
+        self.unacked_queue_msgs = {TITLES_QUEUE: set(), REVIEWS_QUEUE: set()}
+        # This dict stores for each active client, the worker ids that sent an EOF in each query.
+        self.queue_eof_worker_ids = {TITLES_QUEUE: {}, REVIEWS_QUEUE: {}}
+        # We need to know for each queue how many EOFs we need to receive
+        self.eof_quantity_queues = {TITLES_QUEUE: eof_quantity_titles, REVIEWS_QUEUE: eof_quantity_reviews}
         
+        self.leftover_reviews = {}
         self.clients_acum = {}
         self.query = query
+        #
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+        #
         self.middleware = None
         self.queue = queue.Queue()
+
         try:
             middleware = Middleware(self.queue)
         except Exception as e:
@@ -110,54 +130,26 @@ class JoinWorker(StateWorker):
 
         self.stop_worker = False
 
-    def handle_signal(self, *args):
-        print("Gracefully exit")
-        self.queue.put('SIGTERM')
-        self.stop_worker = True
-        if self.middleware != None:
-            self.middleware.close_connection()
-
-    def add_title_EOF_worker_id(self, client_id, worker_id):
-        client_eof_workers_ids = self.eof_workers_ids_titles.get(client_id, set())
-        client_eof_workers_ids.add(worker_id)
-        self.eof_workers_ids_titles[client_id] = client_eof_workers_ids
-
-    def is_title_EOF_repeated(self, worker_id, client_id, client_eof_workers_ids):
-        if worker_id not in client_eof_workers_ids:
-            self.add_title_EOF_worker_id(client_id, worker_id)
-            return False
-        return True
-
-    def add_review_EOF_worker_id(self, client_id, worker_id):
-        client_eof_workers_ids = self.eof_workers_ids_reviews.get(client_id, set())
-        client_eof_workers_ids.add(worker_id)
-        self.eof_workers_ids_reviews[client_id] = client_eof_workers_ids
-
-    def is_review_EOF_repeated(self, worker_id, client_id, client_eof_workers_ids):
-        if worker_id not in client_eof_workers_ids:
-            self.add_review_EOF_worker_id(client_id, worker_id)
-            return False
-        return True
-
-    def add_unacked_titles_EOF(self, client_id, eof_method):
-        unacked_eofs = self.clients_unacked_eofs_titles.get(client_id, set())         
-        unacked_eofs.add(eof_method.delivery_tag)
-
-        self.clients_unacked_eofs_titles[client_id] = unacked_eofs
-    
-    def add_unacked_reviews_EOF(self, client_id, eof_method):
-        unacked_eofs = self.clients_unacked_eofs_reviews.get(client_id, set())         
-        unacked_eofs.add(eof_method.delivery_tag)
-
-        self.clients_unacked_eofs_reviews[client_id] = unacked_eofs
+    # def handle_signal(self, *args):
+    #     print("Gracefully exit")
+    #     self.queue.put('SIGTERM')
+    #     self.stop_worker = True
+    #     if self.middleware != None:
+    #         self.middleware.close_connection()
+    #     self.health_check.join()
 
     def remove_active_client(self, client_id): # TODO: I think the msg_ids accumulated can also be erased
         if client_id in self.leftover_reviews:
             del self.leftover_reviews[client_id]
         
         del self.clients_acum[client_id]
-        del self.eof_counter_titles[client_id]
-        del self.eof_counter_reviews[client_id]
+
+    def initialize_state(self):
+        prev_state = self.log.read_persisted_data()
+        if prev_state != None:
+            self.clients_acum = prev_state[ACUMS_KEY]
+            self.leftover_reviews = prev_state[LEFTOVER_REVIEWS_KEY]
+            self.clients_acummulated_queue_msg_ids = prev_state[ACUM_TITLES_MSG_KEY]
 
     def curr_state(self):
         """
@@ -166,164 +158,18 @@ class JoinWorker(StateWorker):
         """
         curr_state = {}
         curr_state[ACUMS_KEY] = self.clients_acum
-        curr_state[ACUM_TITLES_MSG_KEY] = self.clients_acummulated_titles_msgs
-        curr_state[ACUM_REVIEWS_MSG_KEY] = self.clients_acummulated_review_msgs
+        curr_state[ACUM_TITLES_MSG_KEY] = self.clients_acummulated_queue_msg_ids
         curr_state[LEFTOVER_REVIEWS_KEY] = self.leftover_reviews
 
         return curr_state
 
-    def persist_acum(self):
-        """
-        Persists the acums of all the clients and the msg_ids received for each channel
-        and the left_overs_reviews dict.
-        """
-        curr_state = self.curr_state()
-        self.log.persist(curr_state)
-
     ##########  START TITLES MESSAGES HANDLING ##########
-
-    def handle_titles_data(self, method, body):
-        if is_EOF(body):
-            worker_id = get_EOF_worker_id(body)
-            client_id = get_EOF_client_id(body)
-            client_eof_workers_ids = self.eof_workers_ids_titles.get(client_id, set())
-
-            if self.client_is_active(client_id):
-                if not self.is_title_EOF_repeated(worker_id, client_id, client_eof_workers_ids):
-                    if not self.is_titles_finish(client_id):
-                        self.add_unacked_titles_EOF(client_id, method)
-                        if self.received_all_clients_titles_EOFs(client_id):
-                            # Persist on disk the acums and the received msg_ids
-                            self.persist_acum()
-                            # Ack last received messages of the queue
-                            self.ack_last_titles_messages()
-                            if self.received_all_EOFs(client_id):
-                                # Send the acum of the client and the EOF
-                                self.send_results(client_id)
-                                # Remove the acum of the client since it is not 
-                                # necessary anymore
-                                self.remove_active_client(client_id)
-                            else:
-                                self.finish_titles(client_id)
-
-                            # Update the state on disk and ack the EOFs for this channel and the client
-                            self.persist_acum()
-                            self.ack_titles_EOFs(client_id)
-
-                        return
-
-            self.middleware.ack_message(method)
-            return
-        msg_id, client_id, data = deserialize_titles_message(body)
-
-        if not self.is_titles_message_repeated(client_id, msg_id):
-            self.manage_titles_message(client_id, data, method, msg_id)
-            return
-
-        self.middleware.ack_message(method)
-
-    def finish_titles(self, client_id):
-        """
-        If all the EOFs arrived for a client in the titles queue, it means he 
-        already finished receiving from the titles queue. Then, we no longer store
-        the msg_ids received and we set the state to 'FINISHED'. If we reached this part
-        it means the last messages have been already acked.
-        """
-        self.clients_acummulated_titles_msgs[client_id] = 'FINISHED'
-
-    def is_titles_finish(self, client_id):
-        """
-        If True, means that the EOF that arrived is a repeated EOF because
-        that client already finished in the titles queue.
-        """
-        return self.clients_acummulated_titles_msgs[client_id] == 'FINISHED'
-    
-    def received_all_EOFs(self, client_id):
-        """
-        Checks if the EOFs of both queues have been 
-        receivede for a particular client.
-        This can be checked in different ways.
-        One is to see if the eof_counter_titles and eof_counter_reviews
-        for the client have reached their limit.
-        If this doesnt happen, we need to check one more thing, the acummulated msg ids.
-        This dict is persisted in disk, not like the eof counters. When all the eofs
-        of one queue arrived, the respective clients_acum_msg is set to 'FINISHED'.
-        So we would have to check if any of the queues has been already set to that value.
-        """
-        if client_id not in self.eof_counter_titles:
-            self.eof_counter_titles[client_id] = 0
-
-        if client_id not in self.eof_counter_reviews:
-            self.eof_counter_reviews[client_id] = 0
-
-        if client_id not in self.clients_acummulated_titles_msgs:
-            titles_finished = False
-        else:
-            titles_finished = self.clients_acummulated_titles_msgs[client_id] == 'FINISHED'
-
-        if client_id not in self.clients_acummulated_review_msgs:
-            reviews_finished = False
-        else:
-            reviews_finished = self.clients_acummulated_review_msgs[client_id] == 'FINISHED'
-
-        is_titles_finished = titles_finished or self.eof_counter_titles[client_id] == self.eof_quantity_titles
-        is_reviews_finished = reviews_finished or self.eof_counter_reviews[client_id] == self.eof_quantity_reviews
-
-        return is_titles_finished and is_reviews_finished
-
-    def is_titles_message_repeated(self, client_id, msg_id):
-        if client_id in self.clients_acummulated_titles_msgs:
-            return msg_id in self.clients_acummulated_titles_msgs[client_id]
-        return False
-    
-    def manage_titles_message(self, client_id, data, method, msg_id):
-        self.acummulate_title_message(client_id, data)
-
-        self.add_acummulated_title_msg(client_id, method, msg_id)
-        if self.need_to_persist_titles():
-            self.persist_acum()
-            self.ack_titles_messages()
-    
-    def need_to_persist_titles(self):
-        return len(self.unacked_titles_msgs) == 150 # TODO: Make this a parameter for the worker! WARINIG: it always has to be lower than the prefetch count
-
-    def ack_titles_messages(self):
-        for tag in self.unacked_titles_msgs:
-            self.middleware.ack_message(tag)
-
-        self.unacked_titles_msgs = set()
-
-    def ack_titles_EOFs(self, client_id):
-        for tag in self.clients_unacked_eofs_titles[client_id]:
-            self.middleware.ack_message(tag)
-        # TODO: Is it necessary to keep the client on the dict, or could we erase him?
-        self.clients_unacked_eofs_titles[client_id] = set()
-
-    def add_acummulated_title_msg(self, client_id, msg_method, msg_id):
-        if client_id not in self.clients_acummulated_titles_msgs:
-            self.clients_acummulated_titles_msgs[client_id] = set()
-
-        self.clients_acummulated_titles_msgs[client_id].add(msg_id)
-        self.unacked_titles_msgs.add(msg_method.delivery_tag)
 
     def acummulate_title_message(self, client_id, data):
         if client_id not in self.clients_acum:
             self.clients_acum[client_id] = {}
 
         self.add_title(client_id, data)
-
-    def ack_last_titles_messages(self):
-        if len(self.unacked_titles_msgs) > 0:
-            self.ack_titles_messages()
-
-    def received_all_clients_titles_EOFs(self, client_id):
-        """
-        A EOF from the titles queue was received, so we add one to the counter of the client.
-        Then we check if we received all the necessary EOFs.
-        """
-        self.eof_counter_titles[client_id] = self.eof_counter_titles.get(client_id, 0) + 1
-
-        return self.eof_counter_titles[client_id] == self.eof_quantity_titles
 
     def add_title(self, client_id, data):
         for row_dictionary in data:
@@ -336,91 +182,6 @@ class JoinWorker(StateWorker):
     ###########  END TITLES MESSAGES HANDLING ###########
 
     ##########  START REVIEWS MESSAGES HANDLING ##########
-
-    def handle_reviews_data(self, method, body):
-        if is_EOF(body):
-            worker_id = get_EOF_worker_id(body)
-            client_id = get_EOF_client_id(body)
-            client_eof_workers_ids = self.eof_workers_ids_reviews.get(client_id, set())
-
-            if self.client_is_active(client_id):
-                if not self.is_review_EOF_repeated(worker_id, client_id, client_eof_workers_ids):
-                    if not self.is_reviews_finish(client_id):
-                        self.add_unacked_reviews_EOF(client_id, method)
-                        if self.received_all_clients_reviews_EOFs(client_id):
-                            # Persist on disk the acums and the received msg_ids
-                            self.persist_acum()
-                            # Ack last received messages of the queue
-                            self.ack_last_reviews_messages() # TODO: change this func
-                            if self.received_all_EOFs(client_id):
-                                # Send the acum of the client and the EOF
-                                self.send_results(client_id)
-                                # Remove the acum of the client since it is not 
-                                # necessary anymore
-                                self.remove_active_client(client_id)
-                            else:
-                                self.finish_reviews(client_id)
-                            
-                            # Update the state on disk and ack the EOFs for this channel and the client
-                            self.persist_acum()
-                            self.ack_reviews_EOFs(client_id)
-
-                        return
-
-            self.middleware.ack_message(method)
-            return
-        msg_id, client_id, data = deserialize_titles_message(body)
-
-        if not self.is_reviews_message_repeated(client_id, msg_id):
-            self.manage_review_message(client_id, data, method, msg_id)
-            return
-
-        self.middleware.ack_message(method)
-
-    def ack_reviews_EOFs(self, client_id):
-        for tag in self.clients_unacked_eofs_reviews[client_id]:
-            self.middleware.ack_message(tag)
-
-        # TODO: Is it necessary to keep the client on the dict, or could we erase him?
-        self.clients_unacked_eofs_reviews[client_id] = set()
-
-    def finish_reviews(self, client_id):
-        """
-        If all the EOFs arrived for a client in the reviews queue, it means he 
-        already finished receiving from the reviews queue. Then, we no longer store
-        the msg_ids received and we set the state to 'FINISHED'. If we reached this part
-        it means the last messages have been already acked.
-        """
-        self.clients_acummulated_review_msgs[client_id] = 'FINISHED'
-
-    def is_reviews_finish(self, client_id):
-        """
-        If True, means that the EOF that arrived is a repeated EOF because
-        that client already finished in the reviews queue.
-        """
-        return self.clients_acummulated_review_msgs[client_id] == 'FINISHED'
-    
-    def is_reviews_message_repeated(self, client_id, msg_id):
-        if client_id in self.clients_acummulated_review_msgs:
-            return msg_id in self.clients_acummulated_review_msgs[client_id]
-        return False
-
-    def manage_review_message(self, client_id, data, method, msg_id):
-        self.acummulate_review_message(client_id, data)
-
-        self.add_acummulated_review_msg(client_id, method, msg_id)
-        if self.need_to_persist_reviews():
-            self.persist_acum()
-            self.ack_reviews_messages()
-    
-    def need_to_persist_reviews(self):
-        return len(self.unacked_reviews_msgs) == 150
-    
-    def ack_reviews_messages(self):
-        for tag in self.unacked_reviews_msgs:
-            self.middleware.ack_message(tag)
-
-        self.unacked_reviews_msgs = set()
     
     def acummulate_review_message(self, client_id, data):
         if client_id not in self.clients_acum:
@@ -428,12 +189,22 @@ class JoinWorker(StateWorker):
 
         self.add_review(client_id, data)
 
-    def add_acummulated_review_msg(self, client_id, msg_method, msg_id):
-        if client_id not in self.clients_acummulated_review_msgs:
-            self.clients_acummulated_review_msgs[client_id] = set()
+    def ignore_review(self, client_id, title):
+        """
+        If all the titles already arrived and the title of this review has been already filtered,
+        then this review has to be ignored. We have two ways of knowing if the titles queue already finished.
+        1. Check if the clients_acummulated_queue_msg_ids dict for that queue has been set to FINISHED
+        2. Check if we received all the EOFS for that queue.
+        """
+        titles_finished = client_id in self.clients_acummulated_queue_msg_ids[TITLES_QUEUE] and self.clients_acummulated_queue_msg_ids[TITLES_QUEUE][client_id] == 'FINISHED'
+        reached_titles_eofs = client_id in self.clients_unacked_queue_eofs[TITLES_QUEUE] and len(self.clients_unacked_queue_eofs[TITLES_QUEUE][client_id]) == self.eof_quantity_queues[TITLES_QUEUE]
+        is_title_filtered = title not in self.clients_acum[client_id]
 
-        self.clients_acummulated_review_msgs[client_id].add(msg_id)
-        self.unacked_reviews_msgs.add(msg_method.delivery_tag)
+        return (titles_finished or reached_titles_eofs) and is_title_filtered
+
+    #client_id in self.clients_acummulated_queue_msg_ids[TITLES_QUEUE] and 
+    # (self.clients_acummulated_queue_msg_ids[TITLES_QUEUE][client_id] == 'FINISHED' or len(self.clients_unacked_queue_eofs[TITLES_QUEUE][client_id]) == self.eof_quantity_queues[TITLES_QUEUE]) 
+    # and title not in self.clients_acum[client_id]
 
     def add_review(self, client_id, batch):
         """
@@ -445,9 +216,7 @@ class JoinWorker(StateWorker):
         for row_dictionary in batch:
             title = row_dictionary['Title']
 
-            if self.clients_acummulated_titles_msgs[client_id] == 'FINISHED' and title not in self.clients_acum[client_id]:
-                # If all the titles already arrived and the title of this review has been already filtered,
-                # then this review has to be ignored.
+            if self.ignore_review(client_id, title):
                 continue
             elif title not in self.clients_acum[client_id]:
                 # If the titles didnt finished to arrive and the title of this review is not in the counter_dict,
@@ -469,20 +238,6 @@ class JoinWorker(StateWorker):
             counter[0] += 1
             counter[1] += parsed_value
             self.clients_acum[client_id][title] = counter
-
-    def received_all_clients_reviews_EOFs(self, client_id):
-        """
-        A EOF from the reviews queue was received, so we add one to the counter of the client.
-        Then we check if we received all the necessary EOFs.
-        """
-        self.eof_counter_reviews[client_id] = self.eof_counter_reviews.get(client_id, 0) + 1
-
-        return self.eof_counter_reviews[client_id] == self.eof_quantity_reviews
-
-    
-    def ack_last_reviews_messages(self):
-        if len(self.unacked_reviews_msgs) > 0:
-            self.ack_reviews_messages()
     
     ###########  END REVIEWS MESSAGES HANDLING ###########
 
@@ -545,22 +300,26 @@ class JoinWorker(StateWorker):
         eof_msg = create_EOF(client_id, self.worker_id)
         self.middleware.send_message(self.output_name, eof_msg)
 
-    def initialize_state(self):
-        prev_state = self.log.read_persisted_data()
-        if prev_state != None:
-            self.clients_acum = prev_state[ACUMS_KEY]
-            self.clients_acummulated_titles_msgs = prev_state[ACUM_TITLES_MSG_KEY]
-            self.clients_acummulated_review_msgs = prev_state[ACUM_REVIEWS_MSG_KEY]
-            self.leftover_reviews = prev_state[LEFTOVER_REVIEWS_KEY]
-            print('TITLES: ', self.clients_acummulated_titles_msgs)
-            print('REVIEWS: ', self.clients_acummulated_review_msgs)
+    def acummulate_message(self, client_id, data, queue):
+        if queue == REVIEWS_QUEUE:
+            self.acummulate_review_message(client_id, data)
+        else:
+            self.acummulate_title_message(client_id, data)
+
+    def manage_message(self, client_id, data, queue, method, msg_id):
+        self.acummulate_message(client_id, data, queue)
+
+        self.add_acummulated_message(client_id, method, msg_id, queue)
+        if self.need_to_persist(queue):
+            self.persist_state()
+            self.ack_queue_msgs(queue)
 
     def run(self):
         self.initialize_state()
 
         # Define a callback wrappers
-        callback_with_params_titles = lambda ch, method, properties, body: self.handle_titles_data(method, body)
-        callback_with_params_reviews = lambda ch, method, properties, body: self.handle_reviews_data(method, body)
+        callback_with_params_titles = lambda ch, method, properties, body: self.handle_data(method, body, TITLES_QUEUE)
+        callback_with_params_reviews = lambda ch, method, properties, body: self.handle_data(method, body, REVIEWS_QUEUE)
 
         try:
             # Titles messages
@@ -589,6 +348,17 @@ class DecadeWorker(NoStateWorker):
         self.stop_worker = False
         self.input_name = create_queue_name(input_name, worker_id)
         self.output_name = output_name
+        #
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+        #
         self.middleware = None
         self.eof_quantity = eof_quantity
         self.eof_counter = {}
@@ -604,12 +374,13 @@ class DecadeWorker(NoStateWorker):
 
         self.active_clients = set()
 
-    def handle_signal(self, *args):
-        print("Gracefully exit")
-        self.queue.put('SIGTERM')
-        self.stop_worker = True
-        if self.middleware != None:
-            self.middleware.close_connection()
+    # def handle_signal(self, *args):
+    #     print("Gracefully exit")
+    #     self.queue.put('SIGTERM')
+    #     self.stop_worker = True
+    #     if self.middleware != None:
+    #         self.middleware.close_connection()
+    #     self.health_check.join()
 
     def _create_batches(self, batch, next_workers_quantity):
         """
@@ -642,9 +413,20 @@ class GlobalDecadeWorker(StateWorker):
         self.iteration_queue = iteration_queue
         self.next_workers_quantity = next_workers_quantity
         self.eof_counter = {}
-        self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
+        self.eof_workers_ids = {}                       # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
         self.clients_acum = {}
+        #
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+        #
         self.middleware = None
         self.queue = queue.Queue()
         try:
@@ -656,12 +438,13 @@ class GlobalDecadeWorker(StateWorker):
         self.clients_acummulated_msgs = {}
         self.unacked_msgs = set()
 
-    def handle_signal(self, *args):
-        print("Gracefully exit")
-        self.queue.put('SIGTERM')
-        self.stop_worker = True
-        if self.middleware != None:
-            self.middleware.close_connection()
+    # def handle_signal(self, *args):
+    #     print("Gracefully exit")
+    #     self.queue.put('SIGTERM')
+    #     self.stop_worker = True
+    #     if self.middleware != None:
+    #         self.middleware.close_connection()
+    #     self.health_check.join()
 
     def _send_batches(self, workers_batches, output_queue, client_id, msg_id=NO_ID):
         for worker_id, batch in workers_batches.items():
@@ -716,8 +499,18 @@ class PercentileWorker(StateWorker):
         self.eof_counter = {}
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
-        # self.titles_with_sentiment = {}
         self.clients_acum = {}
+        #
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+        #
         self.middleware = None
         self.queue = queue.Queue()
         try:
@@ -729,12 +522,13 @@ class PercentileWorker(StateWorker):
         self.clients_acummulated_msgs = {}
         self.unacked_msgs = set()
 
-    def handle_signal(self, *args):
-        print("Gracefully exit")
-        self.queue.put('SIGTERM')
-        self.stop_worker = True
-        if self.middleware != None:
-            self.middleware.close_connection()
+    # def handle_signal(self, *args):
+    #     print("Gracefully exit")
+    #     self.queue.put('SIGTERM')
+    #     self.stop_worker = True
+    #     if self.middleware != None:
+    #         self.middleware.close_connection()
+    #     self.health_check.join()
 
     def acummulate_message(self, client_id, data):
         if client_id not in self.clients_acum:
@@ -790,6 +584,17 @@ class TopNWorker(StateWorker):
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
         self.clients_acum = {}
+        #
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+        #
         self.middleware = None
         self.queue = queue.Queue()
         try:
@@ -802,13 +607,14 @@ class TopNWorker(StateWorker):
         self.unacked_msgs = set()
 
 
-    def handle_signal(self, *args):
-        print("Gracefully exit")
-        self.queue.put('SIGTERM')
-        self.stop_worker = True
-        if self.middleware != None:
-            self.middleware.close_connection()
-        print(self.eof_counter)
+    # def handle_signal(self, *args):
+    #     print("Gracefully exit")
+    #     self.queue.put('SIGTERM')
+    #     self.stop_worker = True
+    #     if self.middleware != None:
+    #         self.middleware.close_connection()
+    #     print(self.eof_counter)
+    #     self.health_check.join()
 
     def send_results(self, client_id):
         if not self.last:
@@ -877,6 +683,17 @@ class ReviewSentimentWorker(NoStateWorker):
         self.eof_counter = {}
         self.clients_unacked_eofs = {}
         self.last_clients_msg = {}
+        #
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+        #
         self.middleware = None
         self.queue = queue.Queue()
         try:
@@ -887,12 +704,13 @@ class ReviewSentimentWorker(NoStateWorker):
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.active_clients = set()
 
-    def handle_signal(self, *args):
-        print("Gracefully exit")
-        self.queue.put('SIGTERM')
-        self.stop_worker = True
-        if self.middleware != None:
-            self.middleware.close_connection()
+    # def handle_signal(self, *args):
+    #     print("Gracefully exit")
+    #     self.queue.put('SIGTERM')
+    #     self.stop_worker = True
+    #     if self.middleware != None:
+    #         self.middleware.close_connection()
+    #     self.health_check.join()
 
     def apply_filter(self, data):
         return calculate_review_sentiment(data)
@@ -916,8 +734,18 @@ class FilterReviewsWorker(StateWorker):
         self.eof_counter = {}
         self.eof_workers_ids = {} # This dict stores for each active client, the workers ids of the eofs received.
         self.clients_unacked_eofs = {}
-        # self.filtered_client_titles = {}
         self.clients_acum = {}
+        #
+        self.address = os.getenv("ADDRESS")
+        self.port = int(os.getenv("PORT"))
+        print("SOY EL WORKER {address}:{port}".format(address=self.address, port=self.port))
+        self.hc_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.hc_socket.bind((self.address, self.port))
+        self.hc_socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.hc_socket)
+        self.health_check = Process(target=self.health_checker.handle_health_check)
+        self.health_check.start()
+        #
         self.middleware = None
         self.queue = queue.Queue()
         try:
@@ -930,12 +758,13 @@ class FilterReviewsWorker(StateWorker):
         self.clients_acummulated_msgs = {}
         self.unacked_msgs = set()
 
-    def handle_signal(self, *args):
-        print("Gracefully exit")
-        self.queue.put('SIGTERM')
-        self.stop_worker = True
-        if self.middleware != None:
-            self.middleware.close_connection()
+    # def handle_signal(self, *args):
+    #     print("Gracefully exit")
+    #     self.queue.put('SIGTERM')
+    #     self.stop_worker = True
+    #     if self.middleware != None:
+    #         self.middleware.close_connection()
+    #     self.health_check.join()
 
     def send_results(self, client_id):
         # Send the results to the query 4 and the QueryCoordinator

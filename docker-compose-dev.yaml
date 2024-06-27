@@ -11,6 +11,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    environment:
+      - RABBITMQ_LOGS=-1
 
   server:
     container_name: server
@@ -26,9 +28,13 @@ services:
       - HOST=server
       - PORT=12345
       - LISTEN_BACKLOG=1
+      - HC_PORT=4321
+      - LOG=server_log
+    volumes:
+      - ./persisted_data:/persisted_data
 
-  client:
-    container_name: client
+  client_1:
+    container_name: client_1
     build:
       context: .
       dockerfile: ./client/client.dockerfile
@@ -37,6 +43,7 @@ services:
     links:
       - server
     environment:
+      - ID=1
       - PYTHONUNBUFFERED=1
       - HOST=server
       - PORT=12345
@@ -44,6 +51,47 @@ services:
       - REVIEWS_FILEPATH=./datasets/books_rating_sample.csv
     volumes:
       - ./datasets:/datasets
+      - ./debug:/debug
+
+  client_2:
+    container_name: client_2
+    build:
+      context: .
+      dockerfile: ./client/client.dockerfile
+    depends_on:
+      - server
+    links:
+      - server
+    environment:
+      - ID=2
+      - PYTHONUNBUFFERED=1
+      - HOST=server
+      - PORT=12345
+      - TITLES_FILEPATH=./datasets/books_data.csv
+      - REVIEWS_FILEPATH=./datasets/books_rating_sample.csv
+    volumes:
+      - ./datasets:/datasets
+      - ./debug:/debug
+
+  client_3:
+    container_name: client_3
+    build:
+      context: .
+      dockerfile: ./client/client.dockerfile
+    depends_on:
+      - server
+    links:
+      - server
+    environment:
+      - ID=3
+      - PYTHONUNBUFFERED=1
+      - HOST=server
+      - PORT=12345
+      - TITLES_FILEPATH=./datasets/books_data.csv
+      - REVIEWS_FILEPATH=./datasets/books_rating_sample.csv
+    volumes:
+      - ./datasets:/datasets
+      - ./debug:/debug
 
   query_coordinator_worker0:
     container_name: query_coordinator_worker0
@@ -54,6 +102,8 @@ services:
       - rabbitmq
     links:
       - rabbitmq
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKERS_QUANTITY=1
       - WORKERS_Q1=3,QUEUE_Q1|filter_category_worker
@@ -63,12 +113,90 @@ services:
       - WORKERS_Q5_TITLES=3,QUEUE_Q5|filter_category_worker
       - WORKERS_Q5_REVIEWS=4,QUEUE_Q5|review_sentiment_worker
       - EOF_QUANTITY=3,1,1,1,1
+      - LOG_RESULTS=query_coordinator_results
+      - LOG_DATA=query_coordinator_data
+      - MAX_UNACKED_MSGS=5
+      - ADDRESS=query_coordinator_worker0
+      - PORT=4321
+
+  container_killer:
+    container_name: container_killer
+    build:
+      context: .
+      dockerfile: ./container_killer/container_killer.dockerfile
+    depends_on:
+      - rabbitmq
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root
+    environment:
+      - MODE=random
+
+  container_coordinator_2:
+    container_name: container_coordinator_2
+    build:
+      context: .
+      dockerfile: ./container_coordinator/container_coordinator.dockerfile
+    depends_on:
+      - rabbitmq
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root
+    environment:
+      - LISTEN_BACKLOG=10
+      - ID=2
+      - WORKERS_PORT=4321
+      - WORKERS_QUANTITY=3
+      - ADDRESS=container_coordinator_2
+      - COORDS_PORT=1234
+      - COORDS_LIST=container_coordinator_0,container_coordinator_1,container_coordinator_2
+
+  container_coordinator_0:
+    container_name: container_coordinator_0
+    build:
+      context: .
+      dockerfile: ./container_coordinator/container_coordinator.dockerfile
+    depends_on:
+      - rabbitmq
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root
+    environment:
+      - LISTEN_BACKLOG=10
+      - ID=0
+      - WORKERS_PORT=4321
+      - WORKERS_QUANTITY=3
+      - ADDRESS=container_coordinator_0
+      - COORDS_PORT=1234
+      - COORDS_LIST=container_coordinator_0,container_coordinator_1,container_coordinator_2
+
+  container_coordinator_1:
+    container_name: container_coordinator_1
+    build:
+      context: .
+      dockerfile: ./container_coordinator/container_coordinator.dockerfile
+    depends_on:
+      - rabbitmq
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root
+    environment:
+      - LISTEN_BACKLOG=10
+      - ID=1
+      - WORKERS_PORT=4321
+      - WORKERS_QUANTITY=3
+      - ADDRESS=container_coordinator_1
+      - COORDS_PORT=1234
+      - COORDS_LIST=container_coordinator_0,container_coordinator_1,container_coordinator_2
+
 
   filter_category_computers_worker0:
     container_name: filter_category_computers_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_category_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=0
       - NEXT_WORKER_QUANTITY=3
@@ -76,16 +204,19 @@ services:
       - CATEGORY=Computers
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_category_worker
       - DATA_OUTPUT_NAME=QUEUE_Q1|filter_title_worker
-      - EOF_QUEUE=QUEUE_Q1|eof_category
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_category
       - EOF_QUANTITY=1
       - LAST=0
+      - LOG=filter_category_computers_worker_q1
+      - ADDRESS=filter_category_computers_worker0
+      - PORT=4321
 
   filter_category_computers_worker1:
     container_name: filter_category_computers_worker1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_category_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=1
       - NEXT_WORKER_QUANTITY=3
@@ -93,16 +224,19 @@ services:
       - CATEGORY=Computers
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_category_worker
       - DATA_OUTPUT_NAME=QUEUE_Q1|filter_title_worker
-      - EOF_QUEUE=QUEUE_Q1|eof_category
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_category
       - EOF_QUANTITY=1
       - LAST=0
+      - LOG=filter_category_computers_worker_q1
+      - ADDRESS=filter_category_computers_worker1
+      - PORT=4321
 
   filter_category_computers_worker2:
     container_name: filter_category_computers_worker2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_category_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=2
       - NEXT_WORKER_QUANTITY=3
@@ -110,16 +244,19 @@ services:
       - CATEGORY=Computers
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_category_worker
       - DATA_OUTPUT_NAME=QUEUE_Q1|filter_title_worker
-      - EOF_QUEUE=QUEUE_Q1|eof_category
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_category
       - EOF_QUANTITY=1
       - LAST=0
+      - LOG=filter_category_computers_worker_q1
+      - ADDRESS=filter_category_computers_worker2
+      - PORT=4321
 
   filter_title_worker0:
     container_name: filter_title_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_title_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=0
       - NEXT_WORKER_QUANTITY=3
@@ -127,16 +264,19 @@ services:
       - TITLE_TO_FILTER=distributed
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_title_worker
       - DATA_OUTPUT_NAME=QUEUE_Q1|filter_year_worker
-      - EOF_QUEUE=QUEUE_Q1|eof_title
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_title
       - EOF_QUANTITY=3
       - LAST=0
+      - LOG=filter_title_worker_q1
+      - ADDRESS=filter_title_worker0
+      - PORT=4321
 
   filter_title_worker1:
     container_name: filter_title_worker1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_title_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=1
       - NEXT_WORKER_QUANTITY=3
@@ -144,16 +284,19 @@ services:
       - TITLE_TO_FILTER=distributed
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_title_worker
       - DATA_OUTPUT_NAME=QUEUE_Q1|filter_year_worker
-      - EOF_QUEUE=QUEUE_Q1|eof_title
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_title
       - EOF_QUANTITY=3
       - LAST=0
+      - LOG=filter_title_worker_q1
+      - ADDRESS=filter_title_worker1
+      - PORT=4321
 
   filter_title_worker2:
     container_name: filter_title_worker2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_title_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=2
       - NEXT_WORKER_QUANTITY=3
@@ -161,16 +304,19 @@ services:
       - TITLE_TO_FILTER=distributed
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_title_worker
       - DATA_OUTPUT_NAME=QUEUE_Q1|filter_year_worker
-      - EOF_QUEUE=QUEUE_Q1|eof_title
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_title
       - EOF_QUANTITY=3
       - LAST=0
+      - LOG=filter_title_worker_q1
+      - ADDRESS=filter_title_worker2
+      - PORT=4321
 
   filter_year_worker_q1-0:
     container_name: filter_year_worker_q1-0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_year_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=0
       - NEXT_WORKER_QUANTITY=1
@@ -178,17 +324,20 @@ services:
       - YEAR_RANGE_TO_FILTER=2000,2023
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_year_worker
       - DATA_OUTPUT_NAME=QUEUE_q1_results
-      - EOF_QUEUE=QUEUE_Q1|eof_year
       - END=True
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_year
       - EOF_QUANTITY=3
       - LAST=1
+      - LOG=filter_year_worker_q1
+      - ADDRESS=filter_year_worker_q1-0
+      - PORT=4321
 
   filter_year_worker_q1-1:
     container_name: filter_year_worker_q1-1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_year_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=1
       - NEXT_WORKER_QUANTITY=1
@@ -196,17 +345,20 @@ services:
       - YEAR_RANGE_TO_FILTER=2000,2023
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_year_worker
       - DATA_OUTPUT_NAME=QUEUE_q1_results
-      - EOF_QUEUE=QUEUE_Q1|eof_year
       - END=True
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_year
       - EOF_QUANTITY=3
       - LAST=1
+      - LOG=filter_year_worker_q1
+      - ADDRESS=filter_year_worker_q1-1
+      - PORT=4321
 
   filter_year_worker_q1-2:
     container_name: filter_year_worker_q1-2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_year_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=2
       - NEXT_WORKER_QUANTITY=1
@@ -214,53 +366,74 @@ services:
       - YEAR_RANGE_TO_FILTER=2000,2023
       - DATA_SOURCE_NAME=QUEUE_Q1|filter_year_worker
       - DATA_OUTPUT_NAME=QUEUE_q1_results
-      - EOF_QUEUE=QUEUE_Q1|eof_year
       - END=True
-      - ITERATION_QUEUE=QUEUE_Q1|iteration_year
       - EOF_QUANTITY=3
       - LAST=1
+      - LOG=filter_year_worker_q1
+      - ADDRESS=filter_year_worker_q1-2
+      - PORT=4321
 
   decade_counter_worker0:
     container_name: decade_counter_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/decade_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=0
       - WORKERS_QUANTITY=3
+      - NEXT_WORKERS_QUANTITY=1
       - DATA_SOURCE_NAME=QUEUE_Q2|decade_counter_worker
       - DATA_OUTPUT_NAME=QUEUE_Q2|global_decade_counter_worker
-      - ITERATION_QUEUE=QUEUE_Q2|iteration_decade_counter
+      - LOG=decade_counter_worker_q2
+      - EOF_QUANTITY=1
+      - ADDRESS=decade_counter_worker0
+      - PORT=4321
 
   decade_counter_worker1:
     container_name: decade_counter_worker1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/decade_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=1
       - WORKERS_QUANTITY=3
+      - NEXT_WORKERS_QUANTITY=1
       - DATA_SOURCE_NAME=QUEUE_Q2|decade_counter_worker
       - DATA_OUTPUT_NAME=QUEUE_Q2|global_decade_counter_worker
-      - ITERATION_QUEUE=QUEUE_Q2|iteration_decade_counter
+      - LOG=decade_counter_worker_q2
+      - EOF_QUANTITY=1
+      - ADDRESS=decade_counter_worker1
+      - PORT=4321
 
   decade_counter_worker2:
     container_name: decade_counter_worker2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/decade_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=2
       - WORKERS_QUANTITY=3
+      - NEXT_WORKERS_QUANTITY=1
       - DATA_SOURCE_NAME=QUEUE_Q2|decade_counter_worker
       - DATA_OUTPUT_NAME=QUEUE_Q2|global_decade_counter_worker
-      - ITERATION_QUEUE=QUEUE_Q2|iteration_decade_counter
+      - LOG=decade_counter_worker_q2
+      - EOF_QUANTITY=1
+      - ADDRESS=decade_counter_worker2
+      - PORT=4321
 
   global_decade_counter_worker0:
     container_name: global_decade_counter_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/global_decade_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=0
       - WORKERS_QUANTITY=1
@@ -269,16 +442,19 @@ services:
       - DATA_OUTPUT_NAME=QUEUE_q2_results
       - EOF_QUANTITY=3
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q2|iteration_decade_counter
       - END=True
+      - LOG=global_decade_counter_worker_q2
+      - ADDRESS=global_decade_counter_worker0
+      - PORT=4321
 
   filter_year_worker_q3-0:
     container_name: filter_year_worker_q3-0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_year_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
-      - PYTHONUNBUFFERED=1
       - WORKER_ID=0
       - NEXT_WORKER_QUANTITY=6
       - WORKERS_QUANTITY=3
@@ -287,16 +463,18 @@ services:
       - DATA_SOURCE_NAME=QUEUE_Q3|filter_year_worker
       - DATA_OUTPUT_NAME=QUEUE_Q3|reviews_counter_worker_titles
       - EXCHANGE_TYPE=fanout
-      - EOF_QUEUE=QUEUE_Q3|eof_year
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_year
+      - LOG=filter_year_worker_q3
+      - ADDRESS=filter_year_worker_q3-0
+      - PORT=4321
 
   filter_year_worker_q3-1:
     container_name: filter_year_worker_q3-1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_year_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
-      - PYTHONUNBUFFERED=1
       - WORKER_ID=1
       - NEXT_WORKER_QUANTITY=6
       - WORKERS_QUANTITY=3
@@ -305,16 +483,18 @@ services:
       - DATA_SOURCE_NAME=QUEUE_Q3|filter_year_worker
       - DATA_OUTPUT_NAME=QUEUE_Q3|reviews_counter_worker_titles
       - EXCHANGE_TYPE=fanout
-      - EOF_QUEUE=QUEUE_Q3|eof_year
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_year
+      - LOG=filter_year_worker_q3
+      - ADDRESS=filter_year_worker_q3-1
+      - PORT=4321
 
   filter_year_worker_q3-2:
     container_name: filter_year_worker_q3-2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_year_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
-      - PYTHONUNBUFFERED=1
       - WORKER_ID=2
       - NEXT_WORKER_QUANTITY=6
       - WORKERS_QUANTITY=3
@@ -323,14 +503,17 @@ services:
       - DATA_SOURCE_NAME=QUEUE_Q3|filter_year_worker
       - DATA_OUTPUT_NAME=QUEUE_Q3|reviews_counter_worker_titles
       - EXCHANGE_TYPE=fanout
-      - EOF_QUEUE=QUEUE_Q3|eof_year
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_year
+      - LOG=filter_year_worker_q3
+      - ADDRESS=filter_year_worker_q3-2
+      - PORT=4321
 
   reviews_counter_worker0:
     container_name: reviews_counter_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/reviews_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=0
       - WORKERS_QUANTITY=6
@@ -340,14 +523,19 @@ services:
       - EOF_QUANTITY_TITLES=3
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=reviews_counter_worker0
+      - PORT=4321
 
   reviews_counter_worker1:
     container_name: reviews_counter_worker1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/reviews_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=1
       - WORKERS_QUANTITY=6
@@ -357,14 +545,19 @@ services:
       - EOF_QUANTITY_TITLES=3
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=reviews_counter_worker1
+      - PORT=4321
 
   reviews_counter_worker2:
     container_name: reviews_counter_worker2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/reviews_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=2
       - WORKERS_QUANTITY=6
@@ -374,14 +567,19 @@ services:
       - EOF_QUANTITY_TITLES=3
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=reviews_counter_worker2
+      - PORT=4321
 
   reviews_counter_worker3:
     container_name: reviews_counter_worker3
     build:
       context: .
       dockerfile: ./workers_dockerfiles/reviews_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=3
       - WORKERS_QUANTITY=6
@@ -391,14 +589,19 @@ services:
       - EOF_QUANTITY_TITLES=3
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=reviews_counter_worker3
+      - PORT=4321
 
   reviews_counter_worker4:
     container_name: reviews_counter_worker4
     build:
       context: .
       dockerfile: ./workers_dockerfiles/reviews_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=4
       - WORKERS_QUANTITY=6
@@ -408,14 +611,19 @@ services:
       - EOF_QUANTITY_TITLES=3
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=reviews_counter_worker4
+      - PORT=4321
 
   reviews_counter_worker5:
     container_name: reviews_counter_worker5
     build:
       context: .
       dockerfile: ./workers_dockerfiles/reviews_counter_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=5
       - WORKERS_QUANTITY=6
@@ -425,14 +633,19 @@ services:
       - EOF_QUANTITY_TITLES=3
       - EOF_QUANTITY_REVIEWS=1
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
+      - LOG=reviews_counter_worker_q3
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=reviews_counter_worker5
+      - PORT=4321
 
   filter_review_quantity_worker0:
     container_name: filter_review_quantity_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_review_quantity_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - DATA_SOURCE_NAME=QUEUE_Q3|filter_review_quantity_worker
       - DATA_OUTPUT_NAME=QUEUE_q3_results,QUEUE_Q4|top10_worker
@@ -441,14 +654,19 @@ services:
       - WORKERS_QUANTITY=1
       - NEXT_WORKER_QUANTITY=5
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q3|iteration_reviews_counter
       - END=True
+      - WORKER_ID=0
+      - LOG=filter_review_quantity_worker_q3
+      - ADDRESS=filter_review_quantity_worker0
+      - PORT=4321
 
   top10_worker0:
     container_name: top10_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/top_10_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - TOP_N=10
       - DATA_SOURCE_NAME=QUEUE_Q4|top10_worker
@@ -457,14 +675,18 @@ services:
       - LAST=0
       - WORKER_ID=0
       - EOF_QUANTITY=1
-      - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+      - ADDRESS=top10_worker0
+      - PORT=4321
 
   top10_worker1:
     container_name: top10_worker1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/top_10_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - TOP_N=10
       - DATA_SOURCE_NAME=QUEUE_Q4|top10_worker
@@ -473,14 +695,18 @@ services:
       - LAST=0
       - WORKER_ID=1
       - EOF_QUANTITY=1
-      - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+      - ADDRESS=top10_worker1
+      - PORT=4321
 
   top10_worker2:
     container_name: top10_worker2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/top_10_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - TOP_N=10
       - DATA_SOURCE_NAME=QUEUE_Q4|top10_worker
@@ -489,14 +715,18 @@ services:
       - LAST=0
       - WORKER_ID=2
       - EOF_QUANTITY=1
-      - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+      - ADDRESS=top10_worker2
+      - PORT=4321
 
   top10_worker3:
     container_name: top10_worker3
     build:
       context: .
       dockerfile: ./workers_dockerfiles/top_10_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - TOP_N=10
       - DATA_SOURCE_NAME=QUEUE_Q4|top10_worker
@@ -505,14 +735,18 @@ services:
       - LAST=0
       - WORKER_ID=3
       - EOF_QUANTITY=1
-      - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+      - ADDRESS=top10_worker3
+      - PORT=4321
 
   top10_worker4:
     container_name: top10_worker4
     build:
       context: .
       dockerfile: ./workers_dockerfiles/top_10_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - TOP_N=10
       - DATA_SOURCE_NAME=QUEUE_Q4|top10_worker
@@ -521,14 +755,18 @@ services:
       - LAST=0
       - WORKER_ID=4
       - EOF_QUANTITY=1
-      - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_worker_q4
+      - ADDRESS=top10_worker4
+      - PORT=4321
 
   top_10_worker_last0:
     container_name: top_10_worker_last0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/top_10_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - TOP_N=10
       - DATA_SOURCE_NAME=QUEUE_Q4|top10_last_worker
@@ -538,122 +776,148 @@ services:
       - WORKER_ID=0
       - EOF_QUANTITY=5
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q4|iteration_top10
       - END=True
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=top10_last_worker_q4
+      - ADDRESS=top_10_worker_last0
+      - PORT=4321
 
   review_sentiment_worker0:
     container_name: review_sentiment_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=0
       - WORKERS_QUANTITY=4
       - DATA_SOURCE_NAME=QUEUE_Q5|review_sentiment_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_reviews
-      - EOF_QUEUE=QUEUE_Q5|eof_review_sentiment
       - NEXT_WORKER_QUANTITY=6
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_review_sentiment
+      - EOF_QUANTITY=1
+      - LOG=review_sentiment_worker_q5
+      - ADDRESS=review_sentiment_worker0
+      - PORT=4321
 
   review_sentiment_worker1:
     container_name: review_sentiment_worker1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=1
       - WORKERS_QUANTITY=4
       - DATA_SOURCE_NAME=QUEUE_Q5|review_sentiment_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_reviews
-      - EOF_QUEUE=QUEUE_Q5|eof_review_sentiment
       - NEXT_WORKER_QUANTITY=6
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_review_sentiment
+      - EOF_QUANTITY=1
+      - LOG=review_sentiment_worker_q5
+      - ADDRESS=review_sentiment_worker1
+      - PORT=4321
 
   review_sentiment_worker2:
     container_name: review_sentiment_worker2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=2
       - WORKERS_QUANTITY=4
       - DATA_SOURCE_NAME=QUEUE_Q5|review_sentiment_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_reviews
-      - EOF_QUEUE=QUEUE_Q5|eof_review_sentiment
       - NEXT_WORKER_QUANTITY=6
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_review_sentiment
+      - EOF_QUANTITY=1
+      - LOG=review_sentiment_worker_q5
+      - ADDRESS=review_sentiment_worker2
+      - PORT=4321
 
   review_sentiment_worker3:
     container_name: review_sentiment_worker3
     build:
       context: .
       dockerfile: ./workers_dockerfiles/review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=3
       - WORKERS_QUANTITY=4
       - DATA_SOURCE_NAME=QUEUE_Q5|review_sentiment_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_reviews
-      - EOF_QUEUE=QUEUE_Q5|eof_review_sentiment
       - NEXT_WORKER_QUANTITY=6
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_review_sentiment
+      - EOF_QUANTITY=1
+      - LOG=review_sentiment_worker_q5
+      - ADDRESS=review_sentiment_worker3
+      - PORT=4321
 
   filter_category_worker0:
     container_name: filter_category_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_category_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
-      - PYTHONUNBUFFERED=1
       - WORKER_ID=0
       - NEXT_WORKER_QUANTITY=6
       - WORKERS_QUANTITY=3
       - CATEGORY=Fiction
       - DATA_SOURCE_NAME=QUEUE_Q5|filter_category_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_titles
-      - EOF_QUEUE=QUEUE_Q5|eof_category
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_category
       - EOF_QUANTITY=1
+      - LOG=filter_category_worker_q5
+      - ADDRESS=filter_category_worker0
+      - PORT=4321
 
   filter_category_worker1:
     container_name: filter_category_worker1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_category_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
-      - PYTHONUNBUFFERED=1
       - WORKER_ID=1
       - NEXT_WORKER_QUANTITY=6
       - WORKERS_QUANTITY=3
       - CATEGORY=Fiction
       - DATA_SOURCE_NAME=QUEUE_Q5|filter_category_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_titles
-      - EOF_QUEUE=QUEUE_Q5|eof_category
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_category
       - EOF_QUANTITY=1
+      - LOG=filter_category_worker_q5
+      - ADDRESS=filter_category_worker1
+      - PORT=4321
 
   filter_category_worker2:
     container_name: filter_category_worker2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/filter_category_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
-      - PYTHONUNBUFFERED=1
       - WORKER_ID=2
       - NEXT_WORKER_QUANTITY=6
       - WORKERS_QUANTITY=3
       - CATEGORY=Fiction
       - DATA_SOURCE_NAME=QUEUE_Q5|filter_category_worker
       - DATA_OUTPUT_NAME=QUEUE_Q5|mean_review_sentiment_titles
-      - EOF_QUEUE=QUEUE_Q5|eof_category
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_category
       - EOF_QUANTITY=1
+      - LOG=filter_category_worker_q5
+      - ADDRESS=filter_category_worker2
+      - PORT=4321
 
   mean_review_sentiment_worker0:
     container_name: mean_review_sentiment_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/mean_review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=0
       - WORKERS_QUANTITY=6
@@ -663,14 +927,19 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - DATA_OUTPUT_NAME=QUEUE_Q5|percentile_worker
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=mean_review_sentiment_worker0
+      - PORT=4321
 
   mean_review_sentiment_worker1:
     container_name: mean_review_sentiment_worker1
     build:
       context: .
       dockerfile: ./workers_dockerfiles/mean_review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=1
       - WORKERS_QUANTITY=6
@@ -680,14 +949,19 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - DATA_OUTPUT_NAME=QUEUE_Q5|percentile_worker
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=mean_review_sentiment_worker1
+      - PORT=4321
 
   mean_review_sentiment_worker2:
     container_name: mean_review_sentiment_worker2
     build:
       context: .
       dockerfile: ./workers_dockerfiles/mean_review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=2
       - WORKERS_QUANTITY=6
@@ -697,14 +971,19 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - DATA_OUTPUT_NAME=QUEUE_Q5|percentile_worker
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=mean_review_sentiment_worker2
+      - PORT=4321
 
   mean_review_sentiment_worker3:
     container_name: mean_review_sentiment_worker3
     build:
       context: .
       dockerfile: ./workers_dockerfiles/mean_review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=3
       - WORKERS_QUANTITY=6
@@ -714,14 +993,19 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - DATA_OUTPUT_NAME=QUEUE_Q5|percentile_worker
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=mean_review_sentiment_worker3
+      - PORT=4321
 
   mean_review_sentiment_worker4:
     container_name: mean_review_sentiment_worker4
     build:
       context: .
       dockerfile: ./workers_dockerfiles/mean_review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=4
       - WORKERS_QUANTITY=6
@@ -731,14 +1015,19 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - DATA_OUTPUT_NAME=QUEUE_Q5|percentile_worker
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=mean_review_sentiment_worker4
+      - PORT=4321
 
   mean_review_sentiment_worker5:
     container_name: mean_review_sentiment_worker5
     build:
       context: .
       dockerfile: ./workers_dockerfiles/mean_review_sentiment_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
       - WORKER_ID=5
       - WORKERS_QUANTITY=6
@@ -748,16 +1037,20 @@ services:
       - EOF_QUANTITY_REVIEWS=4
       - DATA_OUTPUT_NAME=QUEUE_Q5|percentile_worker
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
+      - LOG=mean_review_sentiment_worker_q5
+      - MAX_UNACKED_MSGS=150
       - EOF_QUANTITY=3
+      - ADDRESS=mean_review_sentiment_worker5
+      - PORT=4321
 
   percentile_worker0:
     container_name: percentile_worker0
     build:
       context: .
       dockerfile: ./workers_dockerfiles/percentile_worker.dockerfile
+    volumes:
+      - ./persisted_data:/persisted_data
     environment:
-      - PYTHONUNBUFFERED=1
       - DATA_SOURCE_NAME=QUEUE_Q5|percentile_worker
       - DATA_OUTPUT_NAME=QUEUE_q5_results
       - PERCENTILE=90
@@ -765,7 +1058,9 @@ services:
       - WORKERS_QUANTITY=1
       - EOF_QUANTITY=6
       - ACCUMULATOR=True
-      - ITERATION_QUEUE=QUEUE_Q5|iteration_mean_review
       - END=True
       - NEXT_WORKERS_QUANTITY=1
+      - LOG=percentile_worker_q5
+      - ADDRESS=percentile_worker0
+      - PORT=4321
 

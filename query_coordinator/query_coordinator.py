@@ -1,10 +1,12 @@
 from middleware import Middleware
 from serialization import *
-from worker_class import Worker
+from worker_class import MultipleQueueWorker
 from logger import Logger
 import signal
 import queue
 from multiprocessing import Process
+from healthchecking import HealthCheckHandler
+import socket
 
 TITLES_MODE = 'titles'
 REVIEWS_MODE = 'reviews'
@@ -38,45 +40,64 @@ EOF_TYPES = 'eof_types'
 
 class QueryCoordinator:
 
-    def __init__(self, workers_q1, workers_q2, workers_q3_titles, workers_q3_reviews, workers_q5_titles, workers_q5_reviews, eof_quantity, log_data, log_results):
+    def __init__(self, workers_q1, workers_q2, workers_q3_titles, workers_q3_reviews, workers_q5_titles, workers_q5_reviews, eof_quantity, address, port, log_data, log_results, max_unacked_msgs):
         """
         Initializes the query coordinator with the title parse mode
         """
         signal.signal(signal.SIGTERM, self.handle_signal)
 
         self.id = ID
+        self.data_coordinator_p = None
+        self.result_coordinator_p = None
         self.workers = {Q1_KEY: workers_q1, Q2_KEY: workers_q2, Q3_TITLES_KEY: workers_q3_titles, Q3_REVIEWS_KEY: workers_q3_reviews,
                              Q5_TITLES_KEY: workers_q5_titles, Q5_REVIEWS_KEY: workers_q5_reviews}
         self.eof_quantity = eof_quantity
         self.log_data = Logger(log_data, ID)
         self.log_results = Logger(log_results, ID)
-        self.processes = []      
+        self.max_unacked_msgs = max_unacked_msgs   
+
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.bind((address, port))
+        self.socket.listen(1)
+        self.health_checker = HealthCheckHandler(self.socket)
+        self.health_check_handler_p = Process(target=self.health_checker.handle_health_check)
+        self.health_check_handler_p.start()
 
     def handle_signal(self, *args):
-        self.stop_coordinator = True
+        if self.data_coordinator_p:
+            self.data_coordinator_p.terminate()
+        if self.result_coordinator_p:
+            self.data_coordinator_p.terminate()
 
-        for p in self.processes:
-            p.terminate()
-            p.join()
-        
+        try:
+            self.health_check_handler_p.terminate()    
+            self.health_check_handler_p.join()
+            self.health_check_handler_p.close()
+        except:
+            # There is a possibility that the process
+            # hasn't been created yet
+            pass
+
 
     def run(self):
-        data_coordinator_p = Process(target=self.initiate_data_coordinator, args=())
-        data_coordinator_p.start()
-        self.processes.append(data_coordinator_p)
-        result_coordinator_p = Process(target=self.initiate_result_coordinator, args=())
-        result_coordinator_p.start()
-        self.processes.append(result_coordinator_p)
+        self.data_coordinator_p = Process(target=self.initiate_data_coordinator, args=())
+        self.data_coordinator_p.start()
+        self.result_coordinator_p = Process(target=self.initiate_result_coordinator, args=())
+        self.result_coordinator_p.start()
 
-        data_coordinator_p.join()
-        result_coordinator_p.join()
+        
+        self.data_coordinator_p.join()
+        self.result_coordinator_p.join()
+
+        self.data_coordinator_p.close()
+        self.result_coordinator_p.close()
 
     def initiate_data_coordinator(self):
         data_coordinator = DataCoordinator(self.id, self.workers, self.log_data)
         data_coordinator.run()
 
     def initiate_result_coordinator(self):
-        result_coordinator = ResultsCoordinator(self.id, self.eof_quantity, self.log_results)
+        result_coordinator = ResultsCoordinator(self.id, self.eof_quantity, self.log_results, self.max_unacked_msgs)
         result_coordinator.run()
 
 class DataCoordinator:
@@ -99,6 +120,7 @@ class DataCoordinator:
         self.middleware = middleware
 
     def handle_signal(self, *args):
+        self.stop = True
         self.queue.put('SIGTERM')
         if self.middleware != None:
             self.middleware.close_connection()
@@ -175,9 +197,15 @@ class DataCoordinator:
     def receive_and_fordward_data(self):
         callback_with_params = lambda ch, method, properties, body: self.handle_data(method, body)
 
-        # Read the data from the server, parse it and fordward it
-        self.middleware.receive_messages(RECEIVE_SERVER_QUEUE, callback_with_params)
-        self.middleware.consume()
+        try:
+            # Read the data from the server, parse it and fordward it
+            self.middleware.receive_messages(RECEIVE_SERVER_QUEUE, callback_with_params)
+            self.middleware.consume()
+        except Exception as e:
+            if self.stop:
+                print("Gracefully exited")
+            else:
+                raise e
 
     def send_to_pipelines(self, batch, client_id, msg_id):
         batch = self.drop_rows_with_missing_values(batch, ['Title', 'authors', 'categories', 'publishedDate'], client_id)
@@ -285,18 +313,17 @@ class DataCoordinator:
             worker_queue = queue + '_' + str(worker_id)
             self.middleware.send_message(worker_queue, eof_msg)
 
-class ResultsCoordinator:
+class ResultsCoordinator(MultipleQueueWorker):
 
-    def __init__(self, id, eof_quantities, log):
+    def __init__(self, id, eof_quantities, log, max_unacked_msgs):
         signal.signal(signal.SIGTERM, self.handle_signal)
         self.acum = True
         self.id = id
-        #self.eof_quantity = sum(eof_quantities)     # The quantity  
-        self.eof_quantity_queries = {   Q1: eof_quantities[Q1_EOF_QUANTITY_INDEX], Q2: eof_quantities[Q2_EOF_QUANTITY_INDEX], Q3: eof_quantities[Q3_EOF_QUANTITY_INDEX],
+        self.eof_quantity_queues = {   Q1: eof_quantities[Q1_EOF_QUANTITY_INDEX], Q2: eof_quantities[Q2_EOF_QUANTITY_INDEX], Q3: eof_quantities[Q3_EOF_QUANTITY_INDEX],
                                         Q4: eof_quantities[Q4_EOF_QUANTITY_INDEX], Q5: eof_quantities[Q5_EOF_QUANTITY_INDEX]
                                     }
-        self.clients_results = {}                   # This dict stores for each active client, the results of each pipeline.
-        # self.clients_results_counter = {}           # This dict stores for each active client, the quantity of pipeline results that are already complete.
+        self.clients_acum = {}                   # This dict stores for each active client, the results of each pipeline.
+        self.max_unacked_msgs = max_unacked_msgs
         self.stop = False
         self.middleware = None
         self.log = log
@@ -308,15 +335,19 @@ class ResultsCoordinator:
         self.middleware = middleware
 
         # This dict stores for each active client, the delivery tags of the unacked EOFs for each query.
-        self.clients_unacked_query_eofs = {Q1: {}, Q2: {}, Q3: {}, Q4: {}, Q5: {}}
+        self.clients_unacked_queue_eofs = {Q1: {}, Q2: {}, Q3: {}, Q4: {}, Q5: {}}
         # We have to keep record of the msg_ids received for each client in each query  
-        self.client_acummulated_query_msgs = {Q1: {}, Q2: {}, Q3: {}, Q4: {}, Q5: {}}
+        self.clients_acummulated_queue_msg_ids = {Q1: {}, Q2: {}, Q3: {}, Q4: {}, Q5: {}}
         # For each query, we save the delivery_tags of the unacked messages so they can be acked later  
-        self.unacked_query_msgs = {Q1: set(), Q2: set(), Q3: set(), Q4: set(), Q5: set()}
+        self.unacked_queue_msgs = {Q1: set(), Q2: set(), Q3: set(), Q4: set(), Q5: set()}
         # This dict stores for each active client, the worker ids that sent an EOF in each query.
-        self.eof_worker_ids = {Q1: {}, Q2: {}, Q3: {}, Q4: {}, Q5: {}}
+        self.queue_eof_worker_ids = {Q1: {}, Q2: {}, Q3: {}, Q4: {}, Q5: {}}
+
+        # For each query, there are different and especific filds we need for the results
+        self.fields_to_print = {Q1: ['Title', 'authors', 'publisher'], Q2: ['authors'], Q3: ['Title', 'authors'], Q4: ['Title'], Q5: ['Title']}
 
     def handle_signal(self, *args):
+        self.stop = True
         self.queue.put('SIGTERM')
         if self.middleware != None:
             self.middleware.close_connection()
@@ -325,12 +356,12 @@ class ResultsCoordinator:
         self.initialize_state()
         self.manage_results()
         
-    def build_result_line(self, data, fields_to_print, query):
+    def build_result_line(self, data, query):
         """
         Builds the result line for the query
         """
         if query == Q1:
-            return ' - '.join(f'{field.upper()}: {row[field]}' for row in data for field in fields_to_print)
+            return ' - '.join(f'{field.upper()}: {row[field]}' for row in data for field in self.fields_to_print[query])
         elif query == Q3:
             line = ''
             for result_dict in data:
@@ -349,236 +380,91 @@ class ResultsCoordinator:
             return line
         else:
             return data[0]['results']
-        
-    def is_EOF_repeated(self, eof_msg, client_id, worker_id, query):
-        """
-        Each pipeline sends its results through its own queue, and each pipeline has a different
-        quantity of workers at the end stage. This means that if pipeline X has at his end stage
-        4 workers, we will have to receive through the results queue of pipeline X 4 different EOFs.
-        Since this workers can fail, there may be cases where they send the same EOF more than one time.
-
-        Here we check if the worker id is already in the dict that saves for each client, the ids of the
-        workers that already sent their EOF for each query.
-        """
-        if client_id not in self.eof_worker_ids[query]:
-            self.eof_worker_ids[query][client_id] = set()
-
-        if worker_id not in self.eof_worker_ids[query][client_id]:
-            self.eof_worker_ids[query][client_id].add(worker_id)
-            return False
-        
-        return True
-
-    def client_is_active(self, client_id):
-        return client_id in self.clients_results
     
     def remove_active_client(self, client_id):
-        del self.clients_results[client_id]
+        del self.clients_acum[client_id]
         #del self.clients_results_counter[client_id]
         #del self.eof_worker_ids[client_id]
 
-        # Persist into the log, clients_results, clients_results_counter and eof_worker_ids
+        # Persist into the log, clients_acum, clients_results_counter and eof_worker_ids
         # curr_state = self.curr_state()
         # self.log.persist(curr_state)
-    
-    def received_all_query_EOFs(self, client_id, query):
-        """
-        We receive different quantity of EOFs from each query.
-        Here we check if we received all EOFs from an especific query.
-        """
-        query_eof_quantity = self.eof_quantity_queries[query]
-        # We can get the number of eofs received from a query by getting the
-        # quantity of different workers that have already sent their EOF
-        curr_eof_quantity = len(self.eof_worker_ids[client_id][query])
-
-        if query_eof_quantity == curr_eof_quantity:
-            return True
-        return False
-
-    def add_unacked_query_EOF(self, client_id, eof_method, query):
-        if client_id not in self.clients_unacked_query_eofs[query]:
-            self.clients_unacked_query_eofs[query][client_id] = set()
-
-        self.clients_unacked_query_eofs[query][client_id].add(eof_method.delivery_tag)
-
-    def ack_query_EOFs(self, client_id, query):
-        unacked_eofs = self.clients_unacked_query_eofs[query][client_id]
-        for tag in unacked_eofs:
-            self.middleware.ack_message(tag)
-        
-        del self.clients_unacked_query_eofs[query][client_id]
-    
-    def received_all_EOFs(self, client_id):
-        queries_status = []
-        for query in self.client_acummulated_query_msgs.keys():
-            if client_id not in self.eof_worker_ids[query]:
-                eof_quantity_reached = False
-            else:
-                eof_quantity_reached = len(self.eof_worker_ids[query][client_id]) == self.eof_quantity_queries[query]
-
-            if client_id not in self.client_acummulated_query_msgs[query]:
-                query_closed = False
-            else:
-                query_closed = self.client_acummulated_query_msgs[query][client_id] == 'FINISHED'
-
-            query_status = query_closed or eof_quantity_reached
-            queries_status.append(query_status)
-
-        return all(queries_status)
-        # return self.clients_results_counter[client_id] == QUERIES_QUANTITY # Change this value according to how many queries you are running
+  
     
     def initialize_state(self):
         prev_state = self.log.read_persisted_data()
         if prev_state != None:
-            self.clients_results = prev_state[ACUMS_KEY]
-            self.client_acummulated_query_msgs = dict(self.client_acummulated_query_msgs, **prev_state[ACUM_RESULT_MSGS])
+            self.clients_acum = prev_state[ACUMS_KEY]
+            self.clients_acummulated_queue_msg_ids = dict(self.clients_acummulated_queue_msg_ids, **prev_state[ACUM_RESULT_MSGS])
 
     def curr_state(self):
         curr_state = {}
-        curr_state[ACUMS_KEY] = self.clients_results
-        curr_state[ACUM_RESULT_MSGS] = self.client_acummulated_query_msgs
+        curr_state[ACUMS_KEY] = self.clients_acum
+        curr_state[ACUM_RESULT_MSGS] = self.clients_acummulated_queue_msg_ids
 
         return curr_state
 
-    def persist_results(self):
-        curr_state = self.curr_state()
-        self.log.persist(curr_state)
+    def manage_message(self, client_id, result_dict, queue, method, msg_id):
+        self.acummulate_query_result(client_id, result_dict, queue)
 
-    def ack_query_msgs(self, query):
-        unacked_msgs = self.unacked_query_msgs[query]
-        for tag in unacked_msgs:
-            self.middleware.ack_message(tag)
+        self.add_acummulated_message(client_id, method, msg_id, queue)
+        if self.need_to_persist(queue):
+            self.persist_state()
+            self.ack_queue_msgs(queue)
 
-        self.unacked_query_msgs[query] = set()
-    
-    def ack_last_query_messages(self, query):
-        if len(self.unacked_query_msgs[query]) > 0:
-            self.ack_query_msgs(query)
-
-    def received_all_client_query_EOFs(self, client_id, query):
-        query_eof_quantity = self.eof_quantity_queries[query]
-        # We can get the number of eofs received from a query by getting the
-        # quantity of different workers that have already sent their EOF
-        curr_eof_quantity = len(self.eof_worker_ids[query][client_id])
-
-        if query_eof_quantity == curr_eof_quantity:
-            return True
-        return False
-    
-    def handle_results(self, method, body, fields_to_print, query):
-        if is_EOF(body):
-            client_id = get_EOF_client_id(body)
-            worker_id = get_EOF_worker_id(body)
-
-            if self.client_is_active(client_id):
-                if not self.is_EOF_repeated(body, client_id, worker_id, query):
-                    if not self.is_query_finished(client_id, query):
-                        self.add_unacked_query_EOF(client_id, method, query)
-                        if self.received_all_client_query_EOFs(client_id, query):
-                            # Persist on disk the acums and the received msg_ids
-                            self.persist_results()
-                            # Ack last received messages of the queue
-                            self.ack_last_query_messages(query)
-                            if self.received_all_EOFs(client_id):
-                                # Send the acum of the client and the EOF
-                                self.send_results(client_id)
-                                # Remove the acum of the client since it is not 
-                                # necessary anymore
-                                self.remove_active_client(client_id)
-                            else:
-                                self.finish_query(client_id, query)
-
-                            # Update the state on disk and ack the EOFs for this channel and the client
-                            self.persist_results()
-                            self.ack_query_EOFs(client_id, query)
-
-                        return
-
-            self.middleware.ack_message(method)
-            return
-
-        msg_id, client_id, data = deserialize_titles_message(body)
-
-        if not self.is_query_message_repeated(client_id, msg_id, query):
-            self.manage_message(client_id, data, fields_to_print, query, method, msg_id)
-            return
-
-        self.middleware.ack_message(method)
-
-    def is_query_message_repeated(self, client_id, msg_id, query):
-        if client_id in self.client_acummulated_query_msgs[query]:
-            return msg_id in self.client_acummulated_query_msgs[query][client_id]
-        return False
-
-    def finish_query(self, client_id, query):
-        self.client_acummulated_query_msgs[query][client_id] = 'FINISHED'
-
-    def is_query_finished(self, client_id, query):
-        return self.client_acummulated_query_msgs[query][client_id] == 'FINISHED'
-    
-    def need_to_persist(self, query):
-        return len(self.unacked_query_msgs[query]) == 5 # TODO: Make this a parameter for the worker! WARINIG: it always has to be lower than the prefetch count
-
-    def manage_message(self, client_id, result_dict, fields_to_print, query, method, msg_id):
-        self.acummulate_query_result(client_id, result_dict, fields_to_print, query)
-
-        self.add_acummulated_result(client_id, method, msg_id, query)
-        if self.need_to_persist(query):
-            self.persist_results()
-            self.ack_query_msgs(query)
-
-
-    def add_acummulated_result(self, client_id, method, msg_id, query):
-        if client_id not in self.client_acummulated_query_msgs[query]:
-            self.client_acummulated_query_msgs[query][client_id] = set()
-
-        # if client_id not in self.unacked_query_msgs[query]:
-        #     self.unacked_query_msgs[query][client_id] = set()
-
-        self.client_acummulated_query_msgs[query][client_id].add(msg_id)
-        self.unacked_query_msgs[query].add(method.delivery_tag)
-
-
-    def acummulate_query_result(self, client_id, result_dict, fields_to_print, query):
-        if client_id not in self.clients_results:
-            self.clients_results[client_id] = {}
+    def acummulate_query_result(self, client_id, result_dict, query):
+        if client_id not in self.clients_acum:
+            self.clients_acum[client_id] = {}
         
-        new_result_line = '\n' + self.build_result_line(result_dict, fields_to_print, query)
-        self.clients_results[client_id][query] = self.clients_results[client_id].get(query, '') + new_result_line 
+        new_result_line = '\n' + self.build_result_line(result_dict, query)
+        self.clients_acum[client_id][query] = self.clients_acum[client_id].get(query, '') + new_result_line 
 
 
     def manage_results(self):
     
         # # Use queues to receive the queries results
-        q1_results_with_params = lambda ch, method, properties, body: self.handle_results(method, body, ['Title', 'authors', 'publisher'], Q1)
-        q2_results_with_params = lambda ch, method, properties, body: self.handle_results(method, body, ['authors'], Q2)
-        q3_results_with_params = lambda ch, method, properties, body: self.handle_results(method, body, ['Title', 'authors'], Q3)
-        q4_results_with_params = lambda ch, method, properties, body: self.handle_results(method, body, ['Title'], Q4)
-        q5_results_with_params = lambda ch, method, properties, body: self.handle_results(method, body, ['Title'], Q5)
-        self.middleware.receive_messages('QUEUE_q1_results' + '_' +  self.id, q1_results_with_params)
-        self.middleware.receive_messages('QUEUE_q2_results' + '_' +  self.id, q2_results_with_params)
-        self.middleware.receive_messages('QUEUE_q3_results' + '_' +  self.id, q3_results_with_params)
-        self.middleware.receive_messages('QUEUE_q4_results' + '_' +  self.id, q4_results_with_params)
-        self.middleware.receive_messages('QUEUE_q5_results' + '_' +  self.id, q5_results_with_params)
-        self.middleware.consume()
+        q1_results_with_params = lambda ch, method, properties, body: self.handle_data(method, body, Q1)
+        q2_results_with_params = lambda ch, method, properties, body: self.handle_data(method, body, Q2)
+        q3_results_with_params = lambda ch, method, properties, body: self.handle_data(method, body, Q3)
+        q4_results_with_params = lambda ch, method, properties, body: self.handle_data(method, body, Q4)
+        q5_results_with_params = lambda ch, method, properties, body: self.handle_data(method, body, Q5)
+        try:
+            self.middleware.receive_messages('QUEUE_q1_results' + '_' +  self.id, q1_results_with_params)
+            self.middleware.receive_messages('QUEUE_q2_results' + '_' +  self.id, q2_results_with_params)
+            self.middleware.receive_messages('QUEUE_q3_results' + '_' +  self.id, q3_results_with_params)
+            self.middleware.receive_messages('QUEUE_q4_results' + '_' +  self.id, q4_results_with_params)
+            self.middleware.receive_messages('QUEUE_q5_results' + '_' +  self.id, q5_results_with_params)
+            self.middleware.consume()
+        except Exception as e:
+            if self.stop:
+                print("Gracefully exited")
+            else:
+                raise e
 
     def assemble_results(self, client_id):
-        client_results_dict = self.clients_results[client_id]
+        client_results_dict = self.clients_acum[client_id]
         results = []
         
-        results1 = Q1 + client_results_dict[Q1]
-        results.append(results1)
-        results2 = Q2 + client_results_dict[Q2]
-        results.append(results2)
-        results3 = Q3 + client_results_dict[Q3]
-        results.append(results3)
-        results4 = Q4 + client_results_dict[Q4]
-        results.append(results4)
-        results5 = Q5 + client_results_dict[Q5]
-        results.append(results5)
+        result1 = self.assemble_query_result(Q1, client_results_dict)
+        results.append(result1)
+        result2 = self.assemble_query_result(Q2, client_results_dict)
+        results.append(result2)
+        result3 = self.assemble_query_result(Q3, client_results_dict)
+        results.append(result3)
+        result4 = self.assemble_query_result(Q4, client_results_dict)
+        results.append(result4)
+        result5 = self.assemble_query_result(Q5, client_results_dict)
+        results.append(result5)
+
         
         results = '\n'.join(results)
         return results
+    
+    def assemble_query_result(self, query, client_results_dict):
+        result = query
+        if query in client_results_dict:
+            result += client_results_dict[query]
+        return result
 
     def send_results(self, client_id):
         # Create the result and add the client_id

@@ -1,9 +1,47 @@
 from serialization import *
 
+import random
+
 ACUM_KEY = 'acum'
 ACUM_MSG_IDS = 'acummulated_msgs'
 
+#### WORKER THAT HANDLES 1 QUEUE #### 
+
 class Worker:
+    """
+    This worker receives data from only one queue.
+    """
+    def handle_signal(self, *args):
+        print("Gracefully exit")
+        try:
+            self.queue.put('SIGTERM')
+        except:
+            # There is a chance that the SIGTERM arrived
+            # before declaring the queue
+            pass
+        
+        try:
+            self.stop_worker = True
+            if self.middleware != None:
+                self.middleware.close_connection()
+        except:
+            # There is a chance that the SIGTERM arrived
+            # before declaring the middleware
+            pass
+        try:
+            self.health_check.terminate()
+            self.health_check.join()
+            self.health_check.close()
+        except:
+            # There is a chance that the SIGTERM arrived
+            # before declaring the middleware
+            pass
+        try:
+            self.hc_socket.close()
+        except:
+            # If the closing fails, it means it has been already closed
+            # in the HealthCheckHandler process
+            pass
 
     def _create_batches(self, batch, next_workers_quantity):
         raise Exception('Function needs to be implemented')
@@ -129,7 +167,6 @@ class Worker:
             else:
                 raise e
             
-
 class StateWorker(Worker):
     """
     This type of workers acummulates various messages for each client, creating only one big message
@@ -301,8 +338,227 @@ class NoStateWorker(Worker):
         desired_data = self.apply_filter(data)
         if not desired_data:
             return
-        
         self.create_and_send_batches(desired_data, client_id, self.output_name, self.next_workers_quantity, msg_id)
 
     def apply_filter(self, data):
         raise Exception('Function needs to be implemented')
+    
+#### WORKER THAT HANDLES MULTIPLE QUEUES ####
+
+class MultipleQueueWorker:
+    """
+    This worker receives data from more than one queue.
+    """
+
+    def __init__(self): # DELETE!!!
+        self.clients_unacked_queue_eofs = {}
+        self.queue_eof_worker_ids = {}
+        self.clients_acum = {}
+        self.clients_acummulated_queue_msg_ids = {}
+        self.eof_quantity_queues = {}
+        self.unacked_queue_msgs = {}
+
+    def handle_signal(self, *args):
+        print("Gracefully exit")
+        try:
+            self.queue.put('SIGTERM')
+        except:
+            # There is a chance that the SIGTERM arrived
+            # before declaring the queue
+            pass
+
+        try:
+            self.stop_worker = True
+            if self.middleware != None:
+                self.middleware.close_connection()
+        except:
+            # There is a chance that the SIGTERM arrived
+            # before declaring the middleware
+            pass
+        
+        try:
+            self.health_check.terminate()
+            self.health_check.join()
+            self.health_check.close()
+        except:
+            # There is a chance that the SIGTERM arrived
+            # before declaring the middleware
+            pass
+
+        try:
+            self.hc_socket.close()
+        except:
+            # If the closing fails, it means it has been already closed
+            # in the HealthCheckHandler process
+            pass
+
+
+    def is_EOF_repeated(self, client_id, worker_id, queue):
+        """
+        Each queue has a different quantity of EOFs to receive.
+        Since workers can fail, there may be cases where they send the same EOF more than one time.
+
+        Here we check if the worker_id is already in the dict that saves for each client, the ids of the
+        workers that already sent their EOF for each queue.
+        """
+        if client_id not in self.queue_eof_worker_ids[queue]:
+            self.queue_eof_worker_ids[queue][client_id] = set()
+
+        if worker_id not in self.queue_eof_worker_ids[queue][client_id]:
+            self.queue_eof_worker_ids[queue][client_id].add(worker_id)
+            return False
+        
+        return True
+    
+    def client_is_active(self, client_id):
+        return client_id in self.clients_acum
+
+    def add_unacked_queue_EOF(self, client_id, eof_method, queue):
+        if client_id not in self.clients_unacked_queue_eofs[queue]:
+            self.clients_unacked_queue_eofs[queue][client_id] = set()
+
+        self.clients_unacked_queue_eofs[queue][client_id].add(eof_method.delivery_tag)
+
+    def ack_queue_EOFs(self, client_id, queue):
+        unacked_eofs = self.clients_unacked_queue_eofs[queue][client_id]
+        for tag in unacked_eofs:
+            self.middleware.ack_message(tag)
+        
+        del self.clients_unacked_queue_eofs[queue][client_id]
+
+    def received_all_EOFs(self, client_id):
+        queues_status = []
+        for queue in self.clients_acummulated_queue_msg_ids.keys():
+            if client_id not in self.queue_eof_worker_ids[queue]:
+                eof_quantity_reached = False
+            else:
+                eof_quantity_reached = len(self.queue_eof_worker_ids[queue][client_id]) == self.eof_quantity_queues[queue]
+
+            if client_id not in self.clients_acummulated_queue_msg_ids[queue]:
+                queue_closed = False
+            else:
+                queue_closed = self.clients_acummulated_queue_msg_ids[queue][client_id] == 'FINISHED'
+
+            queue_status = queue_closed or eof_quantity_reached
+            queues_status.append(queue_status)
+
+        return all(queues_status)
+    
+    def ack_queue_msgs(self, queue):
+        unacked_msgs = self.unacked_queue_msgs[queue]
+        for tag in unacked_msgs:
+            self.middleware.ack_message(tag)
+
+        self.unacked_queue_msgs[queue] = set()
+
+    def ack_last_queue_messages(self, queue):
+        if len(self.unacked_queue_msgs[queue]) > 0:
+            self.ack_queue_msgs(queue)
+
+    def received_all_client_queue_EOFs(self, client_id, queue):
+        query_eof_quantity = self.eof_quantity_queues[queue]
+        # We can get the number of eofs received from a queue by getting the
+        # quantity of different workers that have already sent their EOF
+        curr_eof_quantity = len(self.queue_eof_worker_ids[queue][client_id])
+
+        if query_eof_quantity == curr_eof_quantity:
+            return True
+        return False
+    
+    def is_queue_message_repeated(self, client_id, msg_id, queue):
+        if client_id in self.clients_acummulated_queue_msg_ids[queue]:
+            return msg_id in self.clients_acummulated_queue_msg_ids[queue][client_id]
+        return False
+
+    def finish_queue(self, client_id, queue):
+        """
+        If all the EOFs arrived for a client in the queue, it means he 
+        already finished receiving from the queue. Then, we no longer store
+        the msg_ids received and we set the state to 'FINISHED'. If we reached this part
+        it means the last messages have been already acked.
+        """
+        self.clients_acummulated_queue_msg_ids[queue][client_id] = 'FINISHED'
+
+    def is_queue_finished(self, client_id, queue):
+        """
+        If True, means that the EOF that arrived is a repeated EOF because
+        that client already finished in the queue.
+        """
+        if client_id not in self.clients_acummulated_queue_msg_ids[queue]:
+            # If we havent received any messages from the queue for that client
+            # and we receive an EOF. It means that there where no results for
+            # that client in the query
+            return False
+        
+        return self.clients_acummulated_queue_msg_ids[queue][client_id] == 'FINISHED'
+
+    def need_to_persist(self, queue):
+        return len(self.unacked_queue_msgs[queue]) == self.max_unacked_msgs
+    
+    def add_acummulated_message(self, client_id, method, msg_id, queue):
+        if client_id not in self.clients_acummulated_queue_msg_ids[queue]:
+            self.clients_acummulated_queue_msg_ids[queue][client_id] = set()
+
+        self.clients_acummulated_queue_msg_ids[queue][client_id].add(msg_id)
+        self.unacked_queue_msgs[queue].add(method.delivery_tag)
+
+    def persist_state(self):
+        curr_state = self.curr_state()
+        self.log.persist(curr_state)
+
+    def curr_state(self):
+        raise Exception('Function needs to be implemented')
+    
+    def initialize_state(self):
+        raise Exception('Function needs to be implemented')
+
+    def remove_active_client(self, client_id):
+        raise Exception('Function needs to be implemented')
+
+    def send_results(self, client_id):
+        raise Exception('Function needs to be implemented')
+    
+    def manage_message(self, client_id, data, queue, method, msg_id):
+        raise Exception('Function needs to be implemented')
+    
+    def handle_data(self, method, body, queue):
+        if is_EOF(body):
+            client_id = get_EOF_client_id(body)
+            worker_id = get_EOF_worker_id(body)
+            
+            if self.client_is_active(client_id):
+                if not self.is_EOF_repeated(client_id, worker_id, queue):
+                    if not self.is_queue_finished(client_id, queue):
+                        self.add_unacked_queue_EOF(client_id, method, queue)
+                        if self.received_all_client_queue_EOFs(client_id, queue):
+
+                            # Persist on disk the acums and the received msg_ids
+                            self.persist_state()
+                            # Ack last received messages of the queue
+                            self.ack_last_queue_messages(queue)
+                            if self.received_all_EOFs(client_id):
+
+                                # Send the acum of the client and the EOF
+                                self.send_results(client_id)
+                                # Remove the acum of the client since it is not 
+                                # necessary anymore
+                                self.remove_active_client(client_id)
+                            else:
+                                self.finish_queue(client_id, queue)
+
+                            # Update the state on disk and ack the EOFs for this channel and the client
+                            self.persist_state()
+                            self.ack_queue_EOFs(client_id, queue)
+
+                        return 
+
+            self.middleware.ack_message(method)
+            return
+
+        msg_id, client_id, data = deserialize_titles_message(body)
+
+        if not self.is_queue_message_repeated(client_id, msg_id, queue):
+            self.manage_message(client_id, data, queue, method, msg_id)
+            return
+
+        self.middleware.ack_message(method)

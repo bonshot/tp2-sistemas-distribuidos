@@ -12,6 +12,8 @@ def read_socket(socket, timeout=None):
         header = _handle_short_read(socket, HEADER_LENGHT, timeout)
 
         # Read message
+        # print(header[:-1], flush=True)
+        # print(header[-1], flush=True)
         msg_len = int(header[:-1])
         end_flag = int(header[-1])
         if end_flag == 1:

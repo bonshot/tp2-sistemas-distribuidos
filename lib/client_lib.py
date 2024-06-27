@@ -3,6 +3,7 @@ import socket
 import time
 from serialization import serialize_dict, serialize_message
 from communications import write_socket, read_socket
+import os
 
 TITLES_IDENTIFIER = 't'
 REVIEWS_IDENTIFIER = 'r'
@@ -44,15 +45,19 @@ class BooksAnalyzer:
 
     def receive_results(self):
         # Listen the server response and print it
-        msg = None
-        while msg != "EOF":
-            msg, e = read_socket(self.server_socket)
-            if e != None:
-                print("Reconnecting to server...")
-                self._connect_server()
-                print("Reconnection succesful")
-
-            print(msg)
+        # The writing of the file is for debugging purposes
+        id = os.getenv('ID')
+        with open(f'./debug/results_{id}.txt', 'w') as f:
+            msg = None
+            while msg != "EOF":
+                msg, e = read_socket(self.server_socket)
+                if e != None:
+                    print("Reconnecting to server...")
+                    self._connect_server()
+                    print("Reconnection succesful")
+                else:
+                    f.write(msg)
+                    print(msg)
 
         self.server_socket.close()
 
