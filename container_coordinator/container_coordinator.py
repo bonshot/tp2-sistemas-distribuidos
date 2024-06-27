@@ -264,7 +264,7 @@ class ContainerCoordinator(ProcessCreator):
         self.hc_socket.bind((f'container_coordinator_{self.id}', HC_PORT)) 
         self.hc_socket.listen(1)
         self.health_check_handler = HealthCheckHandler(socket=self.hc_socket, conn=None)
-        hc_process = Process(target=self.health_check_handler.handle_health_check_with_timeout, args=(5,str(self.id), self.connections,))
+        hc_process = Process(target=self.health_check_handler.handle_health_check_with_timeout, args=(5,str(self.id), self.connections, self.leader,))
         hc_process.start()
         self.processes.append(hc_process)
 

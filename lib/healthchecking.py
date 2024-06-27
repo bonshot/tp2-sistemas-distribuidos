@@ -116,7 +116,7 @@ class HealthCheckHandler():
                 print("Error reading from socket, listening for new connections")
                 self.conn, addr = self.socket.accept()
 
-    def handle_health_check_with_timeout(self, timeout, self_id, connections):
+    def handle_health_check_with_timeout(self, timeout, self_id, connections, leader):
         print("Listening for incoming connections")
         if not self.conn:
             self.conn, addr = self.socket.accept()
@@ -133,22 +133,37 @@ class HealthCheckHandler():
                     write_socket(self.conn, "ACK")
             except:
                 print("Timeout reached for the health check, beginning leader election")
-                self.begin_leader_election(self_id, connections)
+                self.begin_leader_election(self_id, connections, leader)
                 self.conn, addr = self.socket.accept()
 
-    def begin_leader_election(self, self_id, connections):
+    def begin_leader_election(self, self_id, connections, leader):
         print("Beginning leader election")
         dead_connections = []
         # Bully leader election start  
+        count = 0
         for name, conn in connections.items():
             if not name.isdigit() or name == self_id or int(name) < int(self_id):
                 continue
             try:
-                write_socket(conn, f"ELECTION {self_id}")
+                err = write_socket(conn, f"ELECTION {self_id}")
+                if err:
+                    raise err
+                count += 1 # If write_socket doesn't raise an exception, the message was sent
             except:
                 print(f"Error sending election message to {name}, most probably died, skipping")
                 dead_connections.append(name)
                 continue
+        if count == 0: # If no one could receive the message, I am the new leader
+            print("I am the new leader because no one could receive the election message")
+            for name, conn in connections.items():
+                if not name.isdigit():
+                    continue
+                try:
+                    write_socket(conn, f"COORDINATOR {self_id}")
+                except:
+                    print(f"Error sending coordinator message to {name}, most probably died, skipping")
+                    continue
+            leader.value = True
         for name in dead_connections:
             del connections[name]
 
