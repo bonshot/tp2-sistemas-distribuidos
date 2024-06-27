@@ -37,10 +37,29 @@ class ContainerKiller:
             self.coord_mode()
         elif self.mode == 'gateway':
             self.gateway_mode()
+        elif self.mode == 'queries':
+            self.queries_mode()
         else:
             raise Exception('Unknown mode.')
         
         self.docker_client.close()
+
+    def queries_mode(self):
+        """
+        This mode kills all the workers on Q1 first, and then does
+        the same with the workers of Q2.
+        """
+        time.sleep(15)
+
+        containers_to_stop =    [  'filter_category_computers_worker0', 'filter_category_computers_worker1', 'filter_category_computers_worker2', 'filter_title_worker0',
+                                    'filter_title_worker1', 'filter_title_worker2', 'filter_year_worker_q1-0', 'filter_year_worker_q1-1', 'filter_year_worker_q1-2'   
+                                ]
+        self.stop_containers(containers_to_stop)
+
+        time.sleep(30)
+
+        containers_to_stop =    [   'decade_counter_worker0', 'decade_counter_worker1', 'decade_counter_worker2', 'global_decade_counter_worker0'   ]
+        self.stop_containers(containers_to_stop)
 
     def coord_mode(self):
         """
@@ -55,14 +74,14 @@ class ContainerKiller:
                                 ]
         self.stop_containers(containers_to_stop)
 
-        time.sleep(3)
+        time.sleep(15)
 
         containers_to_stop =    [   'filter_category_worker0', 'filter_year_worker_q3-1',
                                     'mean_review_sentiment_worker5'
                                 ]
         self.stop_containers(containers_to_stop)
 
-        time.sleep(10)
+        time.sleep(20)
 
         containers_to_stop =    [   'container_coordinator_2', 'mean_review_sentiment_worker1',
                                     'review_sentiment_worker0', 'review_sentiment_worker1', 'percentile_worker0'
@@ -79,16 +98,16 @@ class ContainerKiller:
         containers_to_stop = ['server', 'reviews_counter_worker2', 'filter_year_worker_q1-2', 'filter_year_worker_q1-0']
         self.stop_containers(containers_to_stop)
 
-        time.sleep(2)
+        time.sleep(15)
 
         containers_to_stop = ['query_coordinator_worker0', 'top_10_worker_last0', 'filter_review_quantity_worker0']
 
-        time.sleep(10)
+        time.sleep(15)
 
         containers_to_stop = ['query_coordinator_worker0', 'server', 'mean_review_sentiment_worker1']
         self.stop_containers(containers_to_stop)
 
-        time.sleep(10)
+        time.sleep(20)
 
         containers_to_stop = ['server', 'mean_review_sentiment_worker0']
         self.stop_containers(containers_to_stop)
